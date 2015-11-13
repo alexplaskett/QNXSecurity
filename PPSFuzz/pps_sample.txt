@@ -1,0 +1,8 @@
+msg::launchBkgdApp\ndat::sys.settings.gYABgFXZghhSmuJ6oBTACT1DwpQ
+dat:json:{"className":"AlertDialog","desc_obj":{"titleText":"screensharing.confirmation.title","messageText":["screensharing.confirmation.body","%s"],"buttons":[{"label":"Deny"},{"label":"Allow"}]}}
+dat:json:{"application":"%s","class":"%s","format":"pem","file":"%s"}
+dat:json:{"itemId":"standbymon%d","title":"%s","subTitle":"%s","appId":"sys.service","type":"uib"}
+dat:json:{"appId":"sys.coreServices2","itemId":"devmode","type":"uib"}
+dat:json:{"itemId":"devmode","type":"uib","translate":"true","title":"%s","subTitle":"%s","autoDelete":"off","target":"sys.settings.target","targetAction":"bb.action.OPEN","payloadURI":"settings://devmode","appId":"sys.coreServices2"}
+msg::launchService\ndat::sys.firstlaunch.gYABgE1L_lY.sjW85E1SCBQsrco,personal,entry=service
+msg::watch\ndat:json:{\"object\":\"/pps/system/installer/upd/current/.all\",\"exec\":\"/tmp/test.sh\","timeout\":1}\

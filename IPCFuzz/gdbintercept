@@ -1,0 +1,7 @@
+# Script for intercepting MsgSend calls and logging the data sent 
+
+break MsgReceive
+
+# Get the COID
+
+# Get the length of the data
