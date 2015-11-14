@@ -2,7 +2,7 @@
 import os
 from glob import glob
 
-# Basically just grep for URI handlers in all of the apps to see if there's any XSS'able ones
+# Dirty script for doing application analysis for BB10 apps.
 
 class AppAnalysis:
 
