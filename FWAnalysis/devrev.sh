@@ -1,5 +1,6 @@
 
 # Script to perform a quick and dirty device review of QNX (BB10 device)
+# Run this script on the BB10 device
 # Produces a lot of output so devrev.sh > outfile.txt
 # al3x 2015 
 # To add, files writable by current user. 
