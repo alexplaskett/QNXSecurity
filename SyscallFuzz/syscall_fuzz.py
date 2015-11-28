@@ -3,9 +3,11 @@
 <alex.plaskett@mwrinfosecurity.com> - 2013
 BB10 Libc exports
 TODO: Remove the libc wrapper and just fuzz directly? 
+Add support for COID's outside of the process
 """
 
 from ctypes import *
+from util import *
 
 # flags for _channel_connect_attr 
 #define _NTO_CHANCON_ATTR_CONFLAGS		0x00000001
@@ -78,6 +80,11 @@ CHAN_FLAGS = [0x0001,0x0002,0x0004,0x0008,0x0010,0x0020,0x0040,0x0080,0x0100,0x0
 #define _NTO_COF_ASYNC			0x0200
 #define _NTO_COF_GLOBAL			0x0400
 
+CONN_FLAGS = [0x0001,0x0002,0x0040,0x0080,0x0100,0x0200,0x0400]
+
+
+
+
 #typedef struct iovec
 #{
 #    void    *iov_base;
@@ -131,11 +138,22 @@ class _msg_info(Structure):
 
 #define _server_info	_msg_info
 
-#class _asyncmsg_connection_descriptor(Structure):
-#	_fields_ = [
-#	("flags",c_ulong),
-#	("sendq")
-#	]
+class _asyncmsg_connection_descriptor(Structure):
+	_fields_ = [
+	("flags",c_ulong),
+	("sendq",c_void_p),
+	("sendq_size",c_ulong),
+	("sendq_head",c_ulong),
+	("sendq_tail",c_ulong),
+	("sendq_free",c_ulong),
+	("err",c_long),
+	("ev",sigevent),
+	("num_curmsg",c_ulong),
+	("ttimer",c_ulong),
+	("block_con",c_ulong),
+	("mu",c_ulong),
+	("reserve",c_ulong),
+	]
 
 #struct _asyncmsg_connection_descriptor {
 #	unsigned flags;							/* flags for the async connection */
@@ -160,6 +178,8 @@ class Syscall:
 	def __init__(self):
 		self.libc = CDLL("libc.so")
 		self.channel_ids = []
+		self.pids = [0]
+		self.util = Util()
 
 	# Not in neutrino.h
 	def cache_flush(self):
@@ -191,72 +211,114 @@ class Syscall:
 	
 
 	def channel_create(self):
-		# CHAN_FLAGS options
-		flags = 0 # Choose a channel flag (_CHF_).
+		flags = self.util.choice(CHAN_FLAGS) # Should OR flags together
 		ret = self.libc.ChannelCreate(flags)
 		if (ret != -1):
+			print("ChannelCreate coid = ", ret)
 			self.channel_ids.append(ret)
+		else:
+			print("ChannelCreate failed")
 
 	# Whats the _r methods for?
 	def channel_create_r(self):
-		flags = 0 # Choose a channel flag (_CHF_).
-		ret = self.libc.ChannelCreate(flags)
+		flags = self.util.choice(CHAN_FLAGS)
+		ret = self.libc.ChannelCreate_r(flags)
 		if (ret != -1):
+			print("channel_create_r coid = ", ret)
 			self.channel_ids.append(ret)
+		else:
+			print("ChannelCreate_r failed")
 
-	# This func seems partially undoc;d.
+	# http://www.qnx.com/developers/docs/660/index.jsp?topic=%2Fcom.qnx.doc.neutrino.lib_ref%2Ftopic%2Fc%2Fchannelcreateext.html
 	def channel_create_ext(self):
 		# extern int ChannelCreateExt(unsigned __flags, mode_t __mode, size_t __bufsize, unsigned __maxnumbuf, const struct sigevent *__ev, struct _cred_info *__cred);
-		flags = 0 # _CHF
-		mode = 0
-		bufsize = 0
-		maxnumbuf = 0 # potentially overflow here.
+		flags = self.util.choice(CHAN_FLAGS)
+		mode = 0 				# access permissions
+		bufsize = self.util.R(0xffffffff)				
+		maxnumbuf = self.util.R(0xffffffff)
+		# TODO: Sort out structs
 		# sigevent *
 		# cred_info *
-		self.libc.ChannelCreateExt(flags)
+		print("Bufsize = ",bufsize)
+		print("Maxnumbuf = ",maxnumbuf)
+		ret = self.libc.ChannelCreateExt(flags,mode,bufsize,maxnumbuf,0,0)
+		if (ret != -1):
+			print("ChannelCreateExt coid = ", ret)
+			self.channel_ids.append(ret)
+		else:
+			print("ChannelCreateExt failed")
 
 	def channel_destory(self):
-		chid = 0
-		self.libc.ChannelDestroy(chid)
+		chid = self.util.choice(self.channel_ids)
+		ret = self.libc.ChannelDestroy(chid)
+		if (ret != 1):
+			print("ChannelDestroy worked")
 
 	def channel_destroy_r(self):
-		chid = 0
-		self.libc.ChannelDestory(chid)
+		chid = self.util.choice(self.channel_ids)
+		ret = self.libc.ChannelDestroy_r(chid)
+		if (ret != 1):
+			print("ChannelDestroy_r worked")
 
 	def connect_attach(self):
 		nd = 0
-		pid = 0
-		chid = 0
+		pid = self.util.choice(self.pids)
+		chid = self.util.choice(self.channel_ids)
 		index = 0
-		flags = 0
-		self.libc.ConnectAttach(nd,pid,chid,index,flags)
+		flags = self.util.choice(CONN_FLAGS)
+		ret = self.libc.ConnectAttach(nd,pid,chid,index,flags)
+		if (ret != -1):
+			print("ConnectAttach = ", ret)
+		else:
+			print("ConnectAttach failed")
 
 	def connect_attach_r(self):
 		nd = 0
-		pid = 0
-		chid = 0
+		pid = self.util.choice(self.pids)
+		chid = self.util.choice(self.channel_ids)
 		index = 0
-		flags = 0
-		self.libc.ConnectAttach_r(nd,pid,chid,index,flags)
+		flags = self.util.choice(CONN_FLAGS)
+		ret = self.libc.ConnectAttach_r(nd,pid,chid,index,flags)
+		if (ret != -1):
+			print("ConnectAttach = ", ret)
+		else:
+			print("ConnectAttach failed")
 
 	# The struct passed to this method is really complicated and new code
 	# async method handling.
+	# This is undocumented
 	# extern int ConnectAttachExt(_Uint32t __nd, pid_t __pid, int __chid, unsigned __index, int __flags, struct _asyncmsg_connection_descriptor *__cd);
 	def connect_attach_ext(self):
 		nd = 0
-		pid = 0
-		chid = 0
+		pid = self.util.choice(self.pids)
+		chid = self.util.choice(self.channel_ids)
 		index = 0
-		flags = 0	
-		#struct _asyncmsg_connection_descriptor *__cd
+		flags = self.util.choice(CONN_FLAGS)	
+		
+		# TODO: Fix the variables in this struct
+		cd = _asyncmsg_connection_descriptor()
+
+		ret = self.libc.ConnectAttach_r(nd,pid,chid,index,flags,cd)
+		if (ret != -1):
+			print("ConnectAttachExt = ", ret)
+		else:
+			print("ConnectAttachExt failed")	
 
 	def connect_detach(self):
-		coid = 0
-		self.libc.ConnectDetach(coid)
+		coid = self.util.choice(self.channel_ids)
+		ret = self.libc.ConnectDetach(coid)
+		if (ret != -1):
+			print("ConnectDetach failed = ", ret)
+		else:
+			print("ConnectDetach failed failed")	
 
 	def connect_detach_r(self):
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		self.libc.ConnectDetach_r(coid)
+		if (ret != -1):
+			print("ConnectDetach_r failed = ", ret)
+		else:
+			print("ConnectDetach_r failed failed")	
 
 
 	def connect_server_info(self):
@@ -708,12 +770,12 @@ class Syscall:
 	#extern int MsgError_r(int __rcvid, int __err);
 	def msg_error(self):
 		__rcvid = 0
-		__err = 
+		__err = 0
 		self.libc.MsgError(__rcvid,__err)
 
 	def msg_error_r(self):
 		__rcvid = 0
-		__err = 
+		__err = 0
 		self.libc.MsgError_r(__rcvid,__err)	
 
 	#extern int MsgCurrent(int __rcvid);
@@ -784,3 +846,12 @@ class Syscall:
 		pass
 
 	
+
+if __name__ == "__main__":
+	syscall = Syscall()
+	syscall.channel_create()
+	syscall.channel_create_r()
+	syscall.channel_create_ext()
+	syscall.channel_destory()
+	syscall.connect_attach()
+	syscall.connect_attach_ext()
