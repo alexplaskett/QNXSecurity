@@ -19,6 +19,8 @@ from util import *
 #define _NTO_CHANCON_ATTR_CURMSGS		0x00000040
 #define _NTO_CHANCON_ATTR_CRED			0x00000080
 
+CHAN_CONNECT_FLAGS = [0x00000001,0x00000002,0x00000004,0x00000008,0x00000010,0x00000020,0x00000040,0x00000080]
+
 class sigevent(Structure):
 	_fields_ = [
 	("sival_int",c_ulong),
@@ -173,6 +175,35 @@ class _asyncmsg_connection_descriptor(Structure):
 #	unsigned reserves[3];					/* reserve */
 #};
 
+#struct _sighandler_info {
+#	siginfo_t			siginfo;
+#	void				(*handler)(_SIG_ARGS);
+#	void				*context;
+#	/* void				data[] */
+#};
+
+# This is broken currently.
+class _siginfo(Structure):
+	_fields_ = [
+	("si_signo",c_ulong),
+	("si_code",c_ulong),
+	("si_errno",c_ulong),
+	]
+
+class _sighandler_info(Structure):
+	_fields_ = [
+	("siginfo",_siginfo),
+	("handler",c_ulong),
+	("context",c_ulong),
+	]
+
+class sigaction(Structure):
+	_fields_ = [
+	("_sa_handler",c_void_p),
+	("sa_flags",c_ulong),
+	("sa_mask",c_ulong),
+	]
+
 class Syscall:
 
 	def __init__(self):
@@ -180,6 +211,7 @@ class Syscall:
 		self.channel_ids = []
 		self.pids = [0]
 		self.util = Util()
+		self.scoids = []
 
 	# Not in neutrino.h
 	def cache_flush(self):
@@ -308,74 +340,112 @@ class Syscall:
 		coid = self.util.choice(self.channel_ids)
 		ret = self.libc.ConnectDetach(coid)
 		if (ret != -1):
-			print("ConnectDetach failed = ", ret)
+			print("ConnectDetach ok = ", ret)
 		else:
-			print("ConnectDetach failed failed")	
+			print("ConnectDetach failed")	
 
 	def connect_detach_r(self):
 		coid = self.util.choice(self.channel_ids)
-		self.libc.ConnectDetach_r(coid)
+		ret = self.libc.ConnectDetach_r(coid)
 		if (ret != -1):
-			print("ConnectDetach_r failed = ", ret)
+			print("ConnectDetach_r ok = ", ret)
 		else:
-			print("ConnectDetach_r failed failed")	
+			print("ConnectDetach_r failed")	
 
 
 	def connect_server_info(self):
 		##extern int ConnectServerInfo(pid_t __pid, int __coid, struct _server_info *__info);
-		pid = 0
-		coid = 0
+		pid = self.util.choice(self.pids)
+		coid = self.util.choice(self.channel_ids)
 		info = _msg_info()
-		self.libc.ConnectServerInfo(pid,coid,byref(info))
+		ret = self.libc.ConnectServerInfo(pid,coid,byref(info))
+		if (ret != -1):
+			print("ConnectServerInfo ok = ", ret)
+			print("scoid = ", info.scoid)
+			self.scoids.append(info.scoid)
+		else:
+			print("ConnectServerInfo failed")	
 
 	def connect_server_info_r(self):
 		##extern int ConnectServerInfo(pid_t __pid, int __coid, struct _server_info *__info);
-		pid = 0
-		coid = 0
+		pid = self.util.choice(self.pids)
+		coid = self.util.choice(self.channel_ids)
 		info = _msg_info()
-		self.libc.ConnectServerInfo_r(pid,coid,byref(info))
+		ret = self.libc.ConnectServerInfo_r(pid,coid,byref(info))
+		if (ret != -1):
+			print("ConnectServerInfo_r ok = ", ret)
+			print("scoid = ", info.scoid)
+			self.scoids.append(info.scoid)
+		else:
+			print("ConnectServerInfo_r failed")	
 
 	# ngroups could potentially overflow here.. fixed size in the struct passed.
+	# These functions are currently broken
 	def connect_client_info(self):
 		#extern int ConnectClientInfo(int __scoid, struct _client_info *__info, int __ngroups);
-		scoid = 0
+		scoid = self.util.choice(self.scoids)
 		info = _client_info()
-		ngroups = 0 
-		self.libc.ConnectClientInfo(scoid,byref(info),ngroups)
+		ngroups = self.util.R(0xffffffff)
+		ret = self.libc.ConnectClientInfo(scoid,byref(info),ngroups)
+		if (ret != -1):
+			print("ConnectClientInfo ok = ", ret)
+		else:
+			print("ConnectClientInfo failed")	
 
 	# ngroups could potentially overflow here.. fixed size in the struct passed.
 	def connect_client_info_r(self):
 		#extern int ConnectClientInfo(int __scoid, struct _client_info *__info, int __ngroups);
-		scoid = 0
+		scoid = self.util.choice(self.scoids)
 		info = _client_info()
-		ngroups = 0 
-		self.libc.ConnectClientInfo_r(scoid,byref(info),ngroups)
+		ngroups = self.util.R(0xffffffff)
+		ret = self.libc.ConnectClientInfo_r(scoid,byref(info),ngroups)
+		if (ret != -1):
+			print("ConnectClientInfo_r ok = ", ret)
+		else:
+			print("ConnectClientInfo_r failed")	
 
 	def connect_flags(self):
 		#extern int ConnectFlags(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
-		pid = 0
-		coid = 0
+		pid = self.util.choice(self.pids)
+		coid = self.util.choice(self.channel_ids)
+		# TODO: Fix mask / bits here
 		mask = 0
 		bits = 0
-		self.libc.ConnectFlags(pid,coid,mask,bits)
+		ret = self.libc.ConnectFlags(pid,coid,mask,bits)
+		if (ret != -1):
+			print("ConnectFlags ok = ", ret)
+		else:
+			print("ConnectFlags failed")	
+
 
 	def connect_flags_r(self):
 		#extern int ConnectFlags(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
-		pid = 0
-		coid = 0
+		pid = self.util.choice(self.pids)
+		coid = self.util.choice(self.channel_ids)
+		# TODO: Fix mask / bits here
 		mask = 0
 		bits = 0
-		self.libc.ConnectFlags_r(pid,coid,mask,bits)
+		ret = self.libc.ConnectFlags_r(pid,coid,mask,bits)
+		if (ret != -1):
+			print("ConnectFlags_r ok = ", ret)
+		else:
+			print("ConnectFlags_r failed")	
 
 	# This is interesting, conn_attr is complicated struct.
+	# Undocumented function
 	def channel_conn_attr(self):
 		# #extern int ChannelConnectAttr(unsigned __id, union _channel_connect_attr *__old_attr, union _channel_connect_attr *__new_attr, unsigned __flags);
-		__id = 0
+		__id = self.util.choice(self.channel_ids)
+
+		# TODO: Fill in structs here
 		__old_attr = _channel_connect_attr()
 		__new_attr = _channel_connect_attr()
-		flags = 0
-		self.libc.ChannelConnectAttr(__id,__old_attr,__new_attr,flags)
-
+		flags = self.util.choice(CHAN_CONNECT_FLAGS)
+		ret = self.libc.ChannelConnectAttr(__id,__old_attr,__new_attr,flags)
+		if (ret != -1):
+			print("ChannelConnectAttr ok = ", ret)
+		else:
+			print("ChannelConnectAttr failed")	
 
 	################################ Messaging Methods ###############################
 
@@ -383,196 +453,211 @@ class Syscall:
 		# extern int MsgSend(int __coid, const void *__smsg, int __sbytes, void *__rmsg, int __rbytes);
 		send_buf = create_string_buffer(10)
 		recv_buf = create_string_buffer(10)
-		coid = 0 # Id if channel from ConnectAttach
+		coid = self.util.choice(self.channel_ids)
 		__smsg = send_buf
-		sbytes = 0
+		sbytes = len(__smsg)
 		__rmsg = recv_buf
-		rbytes = 0
-		self.libc.MsgSend(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))
+		rbytes = len(__rmsg)
+		ret = self.libc.MsgSend(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))
+		if (ret != -1):
+			print("MsgSend ok = ", ret)
+		else:
+			print("MsgSend failed")			
 
 	def msg_send_r(self):
 		# extern int MsgSend(int __coid, const void *__smsg, int __sbytes, void *__rmsg, int __rbytes);
 		send_buf = create_string_buffer(10)
 		recv_buf = create_string_buffer(10)
-		coid = 0 # Id if channel from ConnectAttach
+		coid = self.util.choice(self.channel_ids)
 		__smsg = send_buf
-		sbytes = 0
+		sbytes = len(__smsg)
 		__rmsg = recv_buf
-		rbytes = 0
-		self.libc.MsgSend_r(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))	
+		rbytes = len(__rmsg)
+		ret = self.libc.MsgSend(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))
+		if (ret != -1):
+			print("MsgSend_r ok = ", ret)
+		else:
+			print("MsgSend_r failed")		
 
 	# extern int MsgSendnc(int __coid, const void *__smsg, int __sbytes, void *__rmsg, int __rbytes);
 	# nc is non-cancelation point
 	def msg_send_nc(self):
 		send_buf = create_string_buffer(10)
 		recv_buf = create_string_buffer(10)
-		coid = 0 # Id if channel from ConnectAttach
+		coid = self.util.choice(self.channel_ids)
 		__smsg = send_buf
-		sbytes = 0
+		sbytes = len(__smsg)
 		__rmsg = recv_buf
-		rbytes = 0
-		self.libc.MsgSendnc(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))	
+		rbytes = len(__rmsg)
+		ret = self.libc.MsgSendnc(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))
+		if (ret != -1):
+			print("MsgSendNc ok = ", ret)
+		else:
+			print("MsgSendNc failed")		
 
 	def msg_send_nc_r(self):
 		send_buf = create_string_buffer(10)
 		recv_buf = create_string_buffer(10)
-		coid = 0 # Id if channel from ConnectAttach
+		coid = self.util.choice(self.channel_ids)
 		__smsg = send_buf
-		sbytes = 0
+		sbytes = len(__smsg)
 		__rmsg = recv_buf
-		rbytes = 0
-		self.libc.MsgSendnc_r(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))	
+		rbytes = len(__rmsg)
+		ret = self.libc.MsgSendnc(coid,__smsg,len(__smsg),__rmsg,len(__rmsg))
+		if (ret != -1):
+			print("MsgSendNc_r ok = ", ret)
+		else:
+			print("MsgSendNc_r failed")	
 
 	#extern int MsgSendsv(int __coid, const void *__smsg, int __sbytes, const struct iovec *__riov, int __rparts);
 	def msg_send_sv(self):
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		send_buf = create_string_buffer(10)
 		sbytes = len(send_buf)
 		iov = iovec()
 		rparts = 0
-		self.libc.MsgSendsv(coid,send_buf,sbytes,byref(iov),rparts)
+		ret = self.libc.MsgSendsv(coid,send_buf,sbytes,byref(iov),rparts)
+		if (ret != -1):
+			print("MsgSendsv ok = ", ret)
+		else:
+			print("MsgSendsv failed")	
 
 
 	def msg_send_sv_r(self):
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		send_buf = create_string_buffer(10)
 		sbytes = len(send_buf)
 		iov = iovec()
 		rparts = 0
-		self.libc.MsgSendsv_r(coid,send_buf,sbytes,byref(iov),rparts)
+		ret = self.libc.MsgSendsv(coid,send_buf,sbytes,byref(iov),rparts)
+		if (ret != -1):
+			print("MsgSendsv_r ok = ", ret)
+		else:
+			print("MsgSendsv_r failed")	
 
 	# extern int MsgSendsvnc(int __coid, const void *__smsg, int __sbytes, const struct iovec *__riov, int __rparts);
 	def msg_send_svnc(self):
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		send_buf = create_string_buffer(10)
 		sbytes = len(send_buf)
 		iov = iovec()
 		rparts = 0
-		self.libc.MsgSendsvnc(coid,send_buf,sbytes,byref(iov),rparts)
+		ret = self.libc.MsgSendsvnc(coid,send_buf,sbytes,byref(iov),rparts)
+		if (ret != -1):
+			print("MsgSendsvnc ok = ", ret)
+		else:
+			print("MsgSendsvnc failed")	
 
 	def msg_send_svnc_r(self):
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		send_buf = create_string_buffer(10)
 		sbytes = len(send_buf)
 		iov = iovec()
 		rparts = 0
-		self.libc.MsgSendsvnc_r(coid,send_buf,sbytes,byref(iov),rparts)		
-
-	#extern int MsgSendvs(int __coid, const struct iovec *__siov, int __sparts, void *__rmsg, int __rbytes);
-	def msg_send_vs(self):
-		coid = 0
-		siov = iovec()
-		sparts = 0
-		rmsg = create_string_buffer(10)
-		rbytes = 0
-		self.libc.MsgSendsvnc_r(coid,byref(siov),sparts,rmsg,rbytes)	
-
-	def msg_send_vs_r(self):
-		coid = 0
-		siov = iovec()
-		sparts = 0
-		rmsg = create_string_buffer(10)
-		rbytes = 0
-		self.libc.MsgSendsvnc_r(coid,byref(siov),sparts,rmsg,rbytes)
-
-	#extern int MsgSendvsnc(int __coid, const struct iovec *__siov, int __sparts, void *__rmsg, int __rbytes);
-	def msg_send_vsnc(self):
-		coid = 0
-		siov = iovec()
-		sparts = 0
-		rmsg = create_string_buffer(10)
-		rbytes = 0
-		self.libc.MsgSendvsnc(coid,byref(siov),sparts,rmsg,rbytes)
-	#extern int MsgSendvsnc_r(int __coid, const struct iovec *__siov, int __sparts, void *__rmsg, int __rbytes);
-	def msg_send_vsnc_r(self):
-		coid = 0
-		siov = iovec()
-		sparts = 0
-		rmsg = create_string_buffer(10)
-		rbytes = 0
-		self.libc.MsgSendvsnc_r(coid,byref(siov),sparts,rmsg,rbytes)
+		ret = self.libc.MsgSendsvnc_r(coid,send_buf,sbytes,byref(iov),rparts)
+		if (ret != -1):
+			print("MsgSendsvnc_r ok = ", ret)
+		else:
+			print("MsgSendsvnc_r failed")	
 
 	# extern int MsgSendv(int __coid, const struct iovec *__siov, int __sparts, const struct iovec *__riov, int __rparts);
 	# extern int MsgSendv_r(int __coid, const struct iovec *__siov, int __sparts, const struct iovec *__riov, int __rparts);
 	def msg_send_v(self):
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		siov = iovec()
 		sparts = 0
 		riov = iovec()
 		rparts = 0
-		self.libc.MsgSendv(coid,byref(siov),sparts,byref(riov),rparts)
+		ret = self.libc.MsgSendv(coid,byref(siov),sparts,byref(riov),rparts)
+		if (ret != -1):
+			print("MsgSendv ok = ", ret)
+		else:
+			print("MsgSendv failed")	
 
 	def msg_send_v_r(self):
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		siov = iovec()
 		sparts = 0
 		riov = iovec()
 		rparts = 0
-		self.libc.MsgSendv_r(coid,byref(siov),sparts,byref(riov),rparts)
+		ret = self.libc.MsgSendv(coid,byref(siov),sparts,byref(riov),rparts)
+		if (ret != -1):
+			print("MsgSendv_r ok = ", ret)
+		else:
+			print("MsgSendv_r failed")	
 
-	def msg_send_vnc(self):
-		coid = 0
-		siov = iovec()
-		sparts = 0
-		riov = iovec()
-		rparts = 0
-		self.libc.MsgSendvnc(coid,byref(siov),sparts,byref(riov),rparts)
-
-	def msg_send_vnc_r(self):
-		coid = 0
-		siov = iovec()
-		sparts = 0
-		riov = iovec()
-		rparts = 0
-		self.libc.MsgSendvnc_r(coid,byref(siov),sparts,byref(riov),rparts)
-
+	# These syscalls block
 	#extern int MsgReceive(int __chid, void *__msg, int __bytes, struct _msg_info *__info);
 	#extern int MsgReceive_r(int __chid, void *__msg, int __bytes, struct _msg_info *__info);
 	def msg_receive(self):
-		chid = 0
+		chid = self.util.choice(self.channel_ids)
 		__msg = create_string_buffer(10)
 		bytes = 0
 		__info = _msg_info()
-		self.libc.MsgReceive(chid,__msg,bytes,byref(__info))
+		ret = self.libc.MsgReceive(chid,__msg,bytes,byref(__info))
+		if (ret != -1):
+			print("MsgReceive ok = ", ret)
+		else:
+			print("MsgReceive failed")	
 
 	def msg_receive_r(self):
-		chid = 0
+		chid = self.util.choice(self.channel_ids)
 		__msg = create_string_buffer(10)
 		bytes = 0
 		__info = _msg_info()
-		self.libc.MsgReceive_r(chid,__msg,bytes,byref(__info))		
+		ret = self.libc.MsgReceive(chid,__msg,bytes,byref(__info))
+		if (ret != -1):
+			print("MsgReceive_r ok = ", ret)
+		else:
+			print("MsgReceive_r failed")		
 
 	#extern int MsgReceivev(int __chid, const struct iovec *__iov, int __parts, struct _msg_info *__info);
 	#extern int MsgReceivev_r(int __chid, const struct iovec *__iov, int __parts, struct _msg_info *__info);
 	def msg_receive_v(self):
-		chid = 0
+		chid = self.util.choice(self.channel_ids)
 		iov = iovec()
 		__parts = 0
 		__info = _msg_info()
-		self.libc.MsgReceivev(chid,iov,__parts,__info)
+		ret = self.libc.MsgReceivev(chid,iov,__parts,__info)
+		if (ret != -1):
+			print("MsgReceivev ok = ", ret)
+		else:
+			print("MsgReceivev failed")		
 
 	def msg_receive_v_r(self):
-		chid = 0
+		chid = self.util.choice(self.channel_ids)
 		iov = iovec()
 		__parts = 0
 		__info = _msg_info()
-		self.libc.MsgReceivev_r(chid,iov,__parts,__info)
+		ret = self.libc.MsgReceivev_r(chid,iov,__parts,__info)
+		if (ret != -1):
+			print("MsgReceivev_r ok = ", ret)
+		else:
+			print("MsgReceivev_r failed")		
 
 	#extern int MsgReceivePulse(int __chid, void *__pulse, int __bytes, struct _msg_info *__info);
 	#extern int MsgReceivePulse_r(int __chid, void *__pulse, int __bytes, struct _msg_info *__info);
 	def msg_receive_pulse(self):
-		chid = 0
+		chid = self.util.choice(self.channel_ids)
 		buf = create_string_buffer(256)
 		__bytes = 0
 		__info = None
-		self.libc.MsgReceivePulse(chid,buf,__bytes,__info)
+		ret = self.libc.MsgReceivePulse(chid,buf,__bytes,__info)
+		if (ret != -1):
+			print("MsgReceivePulse ok = ", ret)
+		else:
+			print("MsgReceivePulse failed")		
 
 	def msg_receive_pulse_r(self):
-		chid = 0
+		chid = self.util.choice(self.channel_ids)
 		buf = create_string_buffer(256)
 		__bytes = 0
 		__info = None
-		self.libc.MsgReceivePulse_r(chid,buf,__bytes,__info)
+		ret = self.libc.MsgReceivePulse(chid,buf,__bytes,__info)
+		if (ret != -1):
+			print("MsgReceivePulse_r ok = ", ret)
+		else:
+			print("MsgReceivePulse_r failed")	
 
 	#extern int MsgReceivePulsev(int __chid, const struct iovec *__iov, int __parts, struct _msg_info *__info);
 	#extern int MsgReceivePulsev_r(int __chid, const struct iovec *__iov, int __parts, struct _msg_info *__info);
@@ -586,14 +671,22 @@ class Syscall:
 		__status = 0
 		__msg = create_string_buffer(256)
 		bytes = 0
-		self.libc.MsgReply(rcvid,__status,__msg,bytes)
+		ret = self.libc.MsgReply(rcvid,__status,__msg,bytes)
+		if (ret != -1):
+			print("MsgReply ok = ", ret)
+		else:
+			print("MsgReply failed")	
 
 	def msg_reply_r(self):
 		rcvid = 0
 		__status = 0
 		__msg = create_string_buffer(256)
 		bytes = 0
-		self.libc.MsgReply_r(rcvid,__status,__msg,bytes)
+		ret = self.libc.MsgReply_r(rcvid,__status,__msg,bytes)
+		if (ret != -1):
+			print("MsgReply_r ok = ", ret)
+		else:
+			print("MsgReply_r failed")	
 
 	#extern int MsgReplyv(int __rcvid, int __status, const struct iovec *__iov, int __parts);
 	#extern int MsgReplyv_r(int __rcvid, int __status, const struct iovec *__iov, int __parts);
@@ -697,11 +790,15 @@ class Syscall:
 	#extern int MsgSendPulse(int __coid, int __priority, int __code, int __value);
 	#extern int MsgSendPulse_r(int __coid, int __priority, int __code, int __value);
 	def msg_send_pulse(self):
-		__coid = 0
-		__priority = 0
-		__code = 0 # TODO: find out pulse codes
-		__value = 0
-		self.libc.MsgSendPulse(__coid,__priority,__code,__value)
+		__coid = self.util.choice(self.channel_ids)
+		__priority = self.util.R(0xffffffff)
+		__code = self.util.R(0xffffffff) # TODO: find out pulse codes
+		__value = self.util.R(0xffffffff)
+		ret = self.libc.MsgSendPulse(__coid,__priority,__code,__value)
+		if (ret != -1):
+			print("MsgSendPulse ok", ret)
+		else:
+			print("MsgSendPulse failed")
 
 	def msg_send_pulse_r(self):
 		__coid = 0
@@ -715,12 +812,20 @@ class Syscall:
 	def msg_deliver_event(self):
 		__rcvid = 0
 		__event = sigevent()
-		self.libc.MsgDeliverEvent(__rcvid,byref(__event))
+		ret = self.libc.MsgDeliverEvent(__rcvid,byref(__event))
+		if (ret != -1):
+			print("MsgDeliverEvent ok")
+		else:
+			print("MsgDeliverEvent failed")
 
 	def msg_deliver_event_r(self):
-		__rcvid = 0
+		__rcvid = 0 # TODO: Store these in a list
 		__event = sigevent()
-		self.libc.MsgDeliverEvent_r(__rcvid,byref(__event))
+		ret = self.libc.MsgDeliverEvent_r(__rcvid,byref(__event))
+		if (ret != -1):
+			print("MsgDeliverEvent ok")
+		else:
+			print("MsgDeliverEvent failed")
 
 	# extern int MsgVerifyEvent(int __rcvid, const struct sigevent *__event);
 	# extern int MsgVerifyEvent_r(int __rcvid, const struct sigevent *__event);
@@ -750,21 +855,29 @@ class Syscall:
 	#extern int MsgKeyData_r(int __rcvid, int __oper, _Uint32t __key, _Uint32t *__newkey, const struct iovec *__iov, int __parts);
 	def msg_key_data(self):
 		__rcvid = 0
-		__oper = 0
-		__key = 0
-		__newkey = 0
+		__oper = self.util.choice([0,1,2])
+		__key = self.util.R(0xffffffff)
+		__newkey = c_ulong()
 		__iov = iovec()
-		__parts = 0
-		self.libc.MsgKeyData(__rcvid,__oper,__key,__newkey,__iov,__parts)
+		__parts = self.util.R(0xffffffff)
+		ret = self.libc.MsgKeyData(__rcvid,__oper,__key,byref(__newkey),__iov,__parts)
+		if (ret != -1):
+			print("MsgKeyData ok", ret)
+		else:
+			print("MsgKeyData failed")
 
 	def msg_key_data_r(self):
 		__rcvid = 0
-		__oper = 0
-		__key = 0
-		__newkey = 0
+		__oper = self.util.choice([0,1,2])
+		__key = self.util.R(0xffffffff)
+		__newkey = c_ulong()
 		__iov = iovec()
-		__parts = 0
-		self.libc.MsgKeyData_r(__rcvid,__oper,__key,__newkey,__iov,__parts)
+		__parts = self.util.R(0xffffffff)
+		ret = self.libc.MsgKeyData_r(__rcvid,__oper,__key,byref(__newkey),__iov,__parts)
+		if (ret != -1):
+			print("MsgKeyData_r ok", ret)
+		else:
+			print("MsgKeyData_r failed")
 
 	#extern int MsgError(int __rcvid, int __err);
 	#extern int MsgError_r(int __rcvid, int __err);
@@ -790,25 +903,38 @@ class Syscall:
 
 	# extern int MsgSendAsyncGbl(int __coid, const void *__smsg, size_t __sbytes, unsigned __msg_prio);
 	def msg_send_async_gbl(self):
-		__coid = 0
+		__coid = self.util.choice(self.channel_ids)
 		__smsg = create_string_buffer(256)
 		sbytes = len(__smsg)
 		__msg_prio = 0
-		self.libc.MsgSendAsyncGbl(__coid,__smsg,sbytes,__msg_prio)
+		ret = self.libc.MsgSendAsyncGbl(__coid,__smsg,sbytes,__msg_prio)
+		if (ret != -1):
+			print("MsgSendAsyncGbl ok", ret)
+		else:
+			print("MsgSendAsyncGbl failed")
+
 
 	# extern int MsgSendAsync(int __coid);
 	def msg_send_async(self):
-		__coid = 0
-		self.libc.MsgSendAsync(__coid)
+		__coid = self.util.choice(self.channel_ids)
+		ret = self.libc.MsgSendAsync(__coid)
+		if (ret != -1):
+			print("MsgSendAsync ok", ret)
+		else:
+			print("MsgSendAsync failed")
 
 	# extern int MsgReceiveAsyncGbl(int __chid, void *__rmsg, size_t __rbytes, struct _msg_info *__info, int __coid);
 	def msg_receive_async_gbl(self):
-		__chid = 0
+		__chid = self.util.choice(self.channel_ids)
 		__rmsg = create_string_buffer(256)
 		__rbytes = len(__rmsg)
 		__info = _msg_info()
-		__coid = 0
-		self.libc.MsgReceiveAsyncGbl(__chid,__rmsg,__rbytes,__info,__coid)
+		__coid = self.util.choice(self.channel_ids)
+		ret = self.libc.MsgReceiveAsyncGbl(__chid,__rmsg,__rbytes,__info,__coid)
+		if (ret != -1):
+			print("MsgReceiveAsyncGbl ok", ret)
+		else:
+			print("MsgReceiveAsyncGbl failed")
 
 	# extern int MsgReceiveAsync(int __chid, const struct iovec *__iov, unsigned __parts);
 	def msg_receive_async(self):
@@ -817,7 +943,121 @@ class Syscall:
 		__parts = 0
 		self.libc.MsgReceiveAsync(__chid,byref(iov),__parts)
 
-	# Signal stuff next
+    #extern int MsgPause(int __rcvid, unsigned __cookie);
+	def msg_pause(self):
+		__rcvid = 0
+		__cookie = 0
+		ret = self.libc.MsgPause(__rcvid,__cookie)
+		if (ret != -1):
+			print("MsgPause ok", ret)
+		else:
+			print("MsgPause failed")
+
+	def msg_pause_r(self):
+		__rcvid = 0
+		__cookie = 0
+		ret = self.libc.MsgPause_r(__rcvid,__cookie)
+		if (ret != -1):
+			print("MsgPause_r ok", ret)
+		else:
+			print("MsgPause_r failed")
+
+	###################################### Signal Methods #####################################
+	
+	#extern int SignalKill(_Uint32t __nd, pid_t __pid, int __tid, int __signo, int __code, int __value);
+	def signal_kill(self):
+		nd = 0
+		pid = self.util.choice(self.pids)
+		tid = 0
+		signo = self.util.R(64)
+		code = self.util.R(0xffffffff)
+		value = self.util.R(0xffffffff)
+		ret = self.libc.SignalKill(nd,pid,tid,signo,code,value)
+		if (ret != -1):
+			print("SignalKill ok", ret)
+		else:
+			print("SignalKill failed")		
+
+
+	#extern int SignalKill(_Uint32t __nd, pid_t __pid, int __tid, int __signo, int __code, int __value);
+	def signal_kill_r(self):
+		nd = 0
+		pid = self.util.choice(self.pids)
+		tid = 0
+		signo = self.util.R(64)
+		code = self.util.R(0xffffffff)
+		value = self.util.R(0xffffffff)
+		ret = self.libc.SignalKill_r(nd,pid,tid,signo,code,value)
+		if (ret != -1):
+			print("SignalKill_r ok", ret)
+		else:
+			print("SignalKill_r failed")		
+
+	# extern int SignalReturn(struct _sighandler_info *__info);
+	def signal_return(self):
+		__info = _sighandler_info()
+		ret = self.libc.SignalReturn(__info)
+		if (ret != -1):
+			print("SignalReturn ok", ret)
+		else:
+			print("SignalReturn failed")		
+
+    #extern int SignalFault(unsigned __sigcode, void *__regs, _Uintptrt __refaddr);
+    # This is undocumented
+	def signal_fault(self):
+		signo = self.util.R(64)
+		regs = c_ulong() # RD_VERIFY_PTR(act, kap->regs, sizeof(CPU_REGISTERS));
+		refaddr = c_ulong()
+		ret = self.libc.SignalFault(signo,byref(regs),byref(refaddr))
+		if (ret != -1):
+			print("SignalFault ok", ret)
+		else:
+			print("SignalFault failed")		
+
+    # extern int SignalAction(pid_t __pid, void (*__sigstub)(void), int __signo, const struct sigaction *__act, struct sigaction *__oact);
+	def signal_action(self):
+		pid = self.util.choice(self.pids)
+		sigstub = c_ulong()
+		signo = self.util.R(64)
+		__act = sigaction()
+		_oact = sigaction()
+		ret = self.libc.SignalAction(pid,sigstub,signo,byref(__act),byref(_oact))
+		if (ret != -1):
+			print("SignalAction ok", ret)
+		else:
+			print("SignalAction failed")				
+
+    # extern int SignalProcmask(pid_t __pid, int __tid, int __how, const sigset_t *__set, sigset_t *__oldset);
+	def signal_procmask(self):
+		pid = self.util.choice(self.pids)
+		tid = 0
+		how = self.util.R(5)
+		__set = c_ulong()
+		__oldset = c_ulong()
+		ret = self.libc.SignalProcmask(pid,tid,how,byref(__set),byref(__oldset))
+		if (ret != -1):
+			print("SignalProcmask ok", ret)
+		else:
+			print("SignalProcmask failed")			
+
+	# extern int SignalSuspend(const sigset_t *__set);
+	def signal_suspend(self):
+		__set = c_ulong()
+		ret = self.libc.SignalSuspend(byref(__set))
+		if (ret != -1):
+			print("SignalSuspend ok", ret)
+		else:
+			print("SignalSuspend failed")		
+
+	# extern int SignalWaitinfo(const sigset_t *__set, siginfo_t *__info);
+	def signal_waitinfo(self):
+		__set = c_ulong()
+		__info = _siginfo()
+		ret = self.libc.SignalWaitinfo(byref(__set),byref(__info))
+		if (ret != -1):
+			print("SignalWaitinfo ok", ret)
+		else:
+			print("SignalWaitinfo failed")			
 
 	############################ Clock Methods ##################################
 	# TODO
@@ -855,3 +1095,20 @@ if __name__ == "__main__":
 	syscall.channel_destory()
 	syscall.connect_attach()
 	syscall.connect_attach_ext()
+	syscall.connect_server_info()
+	syscall.connect_client_info()
+	syscall.connect_flags()
+	syscall.channel_conn_attr()
+	syscall.msg_send()
+	syscall.msg_send_pulse()
+	#syscall.msg_receive()
+	#syscall.msg_receive_pulse()
+	syscall.msg_key_data()
+	syscall.msg_send_async_gbl()
+	syscall.msg_send_async()
+	#syscall.msg_receive_async_gbl()
+	syscall.msg_pause()
+	#syscall.signal_kill()
+	syscall.signal_return()
+	syscall.signal_fault()
+	syscall.signal_action()

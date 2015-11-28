@@ -33,3 +33,6 @@ class Util:
 
 	def randint(self):
 		pass
+
+	def get_all_chids(self):
+		pass
