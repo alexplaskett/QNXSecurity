@@ -4,6 +4,7 @@
 # Produces a lot of output so devrev.sh > outfile.txt
 # al3x 2015 
 # To add, files writable by current user. 
+# TODO: Add support for finding previous vulns
 
 PATH=/proc/boot:/base/bin:/base/usr/bin
 

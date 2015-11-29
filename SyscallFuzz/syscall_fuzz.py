@@ -1,9 +1,12 @@
 
 """ QNX syscall fuzzer
-<alex.plaskett@mwrinfosecurity.com> - 2013
+<alex.plaskett@mwrinfosecurity.com> - 2015
 BB10 Libc exports
-TODO: Remove the libc wrapper and just fuzz directly? 
-Add support for COID's outside of the process
+TODO: 
+- Remote logging server
+- Add support for COID's outside of the process
+- Sync/Clock support
+while true; do python3.2 syscall_fuzz.py; done
 """
 
 from ctypes import *
@@ -204,14 +207,71 @@ class sigaction(Structure):
 	("sa_mask",c_ulong),
 	]
 
+class sched_param(Structure):
+	_fields_ = [
+	("_priority",c_ulong),
+	("_curpriority",c_ulong),
+	("__spare",c_ulong),
+	]
+
+
+#struct _sched_info {
+#	int					priority_min;
+#	int					priority_max;
+#	_Uint64t			interval;
+#	int					priority_priv;
+#	int					reserved[11];
+#};
+
+class sched_info(Structure):
+	_fields_ = [
+	("priority_min",c_ulong),
+	("priority_max",c_ulong),	
+	("interval",c_uint64),
+	("priority_priv",c_ulong),
+	("reserved",c_ulong)
+	]
+
+class sync_union(Union):
+	_fields_ = [
+	("count", c_ulong),
+	("fd",c_long),
+	("clockid",c_long)
+	]
+
+class nto_job_t(Structure):
+	_fields_ = [
+	("__u", sync_union),
+	("__owner",c_ulong)
+	]
+
+class itimer(Structure):
+	_fields_ = [
+	("nsec", c_uint64),
+	("interval_nsec",c_uint64)
+	]	
+
+class timerinfo(Structure):
+	_fields_ = [
+	("itime", itimer),
+	("otime",itimer),
+	("flags", c_ulong),
+	("tid", c_ulong),
+	("notify", c_ulong),
+	("clockid", c_ulong),
+	("overruns", c_ulong),
+	("sigevent",sigevent)
+	]
+
 class Syscall:
 
 	def __init__(self):
 		self.libc = CDLL("libc.so")
-		self.channel_ids = []
+		self.channel_ids = [0,1,1073741824]
 		self.pids = [0]
 		self.util = Util()
 		self.scoids = []
+		self.timer_ids = [0]
 
 	# Not in neutrino.h
 	def cache_flush(self):
@@ -1059,56 +1119,444 @@ class Syscall:
 		else:
 			print("SignalWaitinfo failed")			
 
+	############################ Thread Methods ##################################
+
+	# extern int ThreadCreate(pid_t __pid, void *(*__func)(void *__arg), void *__arg, const struct _thread_attr *__attr);
+	def threat_create(self):
+		pid = self.util.choice(self.pids)
+		func = create_string_buffer(256)
+
+	# extern int ThreadCtl(int __cmd, void *__data);
+	def thread_ctl(self):
+		cmd = self.util.R(15)
+		data = create_string_buffer(256)
+		ret = self.libc.ThreadCtl(cmd,data)
+		if (ret != -1):
+			print("ThreadCtl ok", ret)
+		else:
+			print("ThreadCtl failed")			
+
+	# extern int ThreadCtlExt(pid_t __pid, int __tid, int __cmd, void *__data);
+	# undocumented
+	def thread_ctl_ext(self):
+		pid = self.util.choice(self.pids)
+		tid = 0
+		cmd = self.util.R(15)
+		data = create_string_buffer(256)
+		ret = self.libc.ThreadCtlExt(cmd,data)
+		if (ret != -1):
+			print("ThreadCtlExt ok", ret)
+		else:
+			print("ThreadCtlExt failed")
+
+	############################ Interupt Methods ##################################
+
+	# extern int InterruptHookTrace(const struct sigevent *(*__handler)(int), unsigned __flags);
+	def interupt_hook_trace(self):
+		handler = c_ulong()
+		flags = 0
+		ret = self.libc.InterruptHookTrace(byref(handler),flags)
+		if (ret != -1):
+			print("InterruptHookTrace ok", ret)
+		else:
+			print("InterruptHookTrace failed")	
+
+	# extern int InterruptHookIdle(void (*__handler)(_Uint64t *, struct qtime_entry *), unsigned __flags);
+	def interupt_hook_idle(self):
+		handler = c_ulong()
+		flags = 0
+		ret = self.libc.InterruptHookIdle(byref(handler),flags)
+		if (ret != -1):
+			print("InterruptHookIdle ok", ret)
+		else:
+			print("InterruptHookIdle failed")	
+
+	# extern int InterruptHookIdle2(void (*__handler)(unsigned, struct syspage_entry *, struct _idle_hook *), unsigned __flags);
+	def interupt_hook_idle2(self):
+		handler = c_ulong()
+		flags = 0
+		ret = self.libc.InterruptHookIdle2(byref(handler),flags)
+		if (ret != -1):
+			print("InterruptHookIdle2 ok", ret)
+		else:
+			print("InterruptHookIdle2 failed")
+
+	# extern int InterruptHookOverdriveEvent(const struct sigevent *__event, unsigned __flags);
+	def interupt_hook_overdrive_event(self):
+		__event = sigevent()
+		flags = 0
+		ret = self.libc.InterruptHookOverdriveEvent(byref(__event),flags)
+		if (ret != -1):
+			print("InterruptHookOverdriveEvent ok", ret)
+		else:
+			print("InterruptHookOverdriveEvent failed")	
+
+	# extern int InterruptAttachEvent(int __intr, const struct sigevent *__event, unsigned __flags);
+	def interupt_attach_event(self):
+		intr = self.util.R(0xffffffff)
+		__event = sigevent()
+		flags = 0
+		ret = self.libc.InterruptAttachEvent(intr,byref(__event),flags)
+		if (ret != -1):
+			print("InterruptAttachEvent ok", ret)
+		else:
+			print("InterruptAttachEvent failed")	
+
+    # extern int InterruptAttach(int __intr, const struct sigevent *(*__handler)(void *__area, int __id), const void *__area, int __size, unsigned __flags);
+	def interupt_attach_event(self):
+		intr = self.util.R(0xffffffff)
+		__event = sigevent()
+		area = create_string_buffer(256)
+		size = len(area)
+		flags = 0
+		ret = self.libc.InterruptAttach(intr,byref(__event),area,size,flags)
+		if (ret != -1):
+			print("InterruptAttach ok", ret)
+		else:
+			print("InterruptAttach failed")
+
+	# extern int InterruptDetach(int __id);
+	def interupt_detach(self):
+		_id = self.util.R(0xffffffff)
+		ret = self.libc.InterruptAttach(_id)
+		if (ret != -1):
+			print("InterruptDetach ok", ret)
+		else:
+			print("InterruptDetach failed")		
+
+	# extern int InterruptWait(int __flags, const _Uint64t *__timeout);
+	def interupt_wait(self):
+		__flags = 0
+		timeout = c_ulong()
+		ret = self.libc.InterruptWait(__flags,byref(timeout))
+		if (ret != -1):
+			print("InterruptWait ok", ret)
+		else:
+			print("InterruptWait failed")			
+
+	# extern int InterruptCharacteristic(int __type, int __id, unsigned *__new, unsigned *__old);
+	def interupt_characteristic(self):
+		__type = 0
+		_id = self.util.R(0xffffffff)
+		_new = c_ulong()
+		_old = c_ulong()
+		ret = self.libc.InterruptCharacteristic(__type,_id,byref(_new),byref(_old))
+		if (ret != -1):
+			print("InterruptCharacteristic ok", ret)
+		else:
+			print("InterruptCharacteristic failed")		
+
+	############################ Scheduler Methods #################################
+	# extern int SchedGet(pid_t __pid, int __tid, struct sched_param *__param);
+	def scheduler_get(self):
+		pid = self.util.choice(self.pids)
+		tid = 0
+		_param = sched_param()
+		ret = self.libc.SchedGet(pid,tid,_param)
+		if (ret != -1):
+			print("SchedGet ok", ret)
+		else:
+			print("SchedGet failed")	   	
+
+	def scheduler_set(self):
+		pid = self.util.choice(self.pids)
+		tid = 0
+		__algorithm = 0
+		_param = sched_param()
+		ret = self.libc.SchedSet(pid,tid,__algorithm,_param)
+		if (ret != -1):
+			print("SchedSet ok", ret)
+		else:
+			print("SchedSet failed")
+
+	# extern int SchedInfo(pid_t __pid, int __algorithm, struct _sched_info *__info);
+	def scheduler_info(self):
+		pid = self.util.choice(self.pids)
+		__algorithm = 0
+		_info = sched_info()
+		ret = self.libc.SchedInfo(pid,__algorithm,byref(_info))
+		if (ret != -1):
+			print("SchedInfo ok", ret)
+		else:
+			print("SchedInfo failed")    	
+
+	# extern int SchedYield(void);
+	def scheduler_yield(self):
+		ret = self.libc.SchedYield()
+		if (ret != -1):
+			print("SchedYield ok", ret)
+		else:
+			print("SchedYield failed")  		
+
+	# extern int SchedCtl(int __cmd, void *__data, size_t __length);
+	def scheduler_ctl(self):
+		cmd = 200+self.util.R(16)
+		if (self.util.chance(5)):
+			cmd = self.util.R(3)
+		data = create_string_buffer(self.util.R(256))
+		l = len(data)
+		ret = self.libc.SchedCtl(cmd,data,l)
+		if (ret != -1):
+			print("SchedCtl ok", ret)
+		else:
+			print("SchedCtl failed")  		
+
+	# extern int SchedJobCreate(nto_job_t	*__job);
+	# undocumented
+	def scheduler_job_create(self):
+		job = nto_job_t()
+		ret = self.libc.SchedJobCreate(byref(job))
+		if (ret != -1):
+			print("SchedJobCreate ok", ret)
+		else:
+			print("SchedJobCreate failed")  		
+
+	# extern int SchedJobDestroy(nto_job_t	*__job);
+	def scheduler_job_destroy(self):
+		job = nto_job_t()
+		ret = self.libc.SchedJobDestroy(byref(job))
+		if (ret != -1):
+			print("SchedJobDestroy ok", ret)
+		else:
+			print("SchedJobDestroy failed")  	
+
+	# extern int SchedWaypoint(nto_job_t *__job, const _Int64t *__new, _Int64t *__old);
+	# undocumented
+	def scheduler_waypoint(self):
+		job = nto_job_t()
+		new = c_ulong(self.util.R(0xffffffff))
+		old = c_ulong(self.util.R(0xffffffff))
+		ret = self.libc.SchedWaypoint(byref(job),byref(new),byref(old))
+		if (ret != -1):
+			print("SchedWaypoint ok", ret)
+		else:
+			print("SchedWaypoint failed") 	
+
+    # extern int SchedWaypoint2(nto_job_t *__job, const _Int64t *__new, const _Int64t *__max, _Int64t *__old);
+    # undocumented
+	def scheduler_waypoint2(self):
+		job = nto_job_t()
+		new = c_ulong(self.util.R(0xffffffff))
+		m = c_ulong(self.util.R(0xffffffff))
+		old = c_ulong(self.util.R(0xffffffff))
+		ret = self.libc.SchedWaypoint2(byref(job),byref(new),byref(m),byref(old))
+		if (ret != -1):
+			print("SchedWaypoint2 ok", ret)
+		else:
+			print("SchedWaypoint2 failed") 	
+
+	############################ Timer Methods ##################################
+
+	# extern int TimerCreate(clockid_t __id, const struct sigevent *__notify);
+	def timer_create(self):
+		i = self.util.R(5)
+		event = sigevent()
+		ret = self.libc.TimerCreate(i,byref(event))
+		if (ret != -1):
+			print("TimerCreate ok", ret)
+			self.timer_ids.append(ret)
+		else:
+			print("TimerCreate failed") 			
+
+	# extern int TimerDestroy(timer_t __id);
+	def timer_destroy(self):
+		i = self.util.choice(self.timer_ids)
+		event = sigevent()
+		ret = self.libc.TimerDestroy(i)
+		if (ret != -1):
+			print("TimerDestroy ok", ret)
+		else:
+			print("TimerDestroy failed") 	
+
+	# extern int TimerSettime(timer_t __id, int __flags, const struct _itimer *__itime, struct _itimer *__oitime);
+	def timer_settime(self):
+		i = self.util.choice(self.timer_ids)
+		flags = 0
+		itime = itimer()
+		oitimer = itimer()
+		ret = self.libc.TimerSettime(i,byref(itime),byref(oitimer))
+		if (ret != -1):
+			print("TimerSettime ok", ret)
+		else:
+			print("TimerSettime failed") 			
+
+	# extern int TimerInfo(pid_t __pid, timer_t __id, int __flags, struct _timer_info *__info);
+	def timer_info(self):
+		pid = self.util.choice(self.pids)
+		i = self.util.choice(self.timer_ids)
+		flags = 0
+		info = timerinfo()
+		ret = self.libc.TimerInfo(pid,i,flags,byref(info))
+		if (ret != -1):
+			print("TimerInfo ok", ret)
+		else:
+			print("TimerInfo failed") 		
+
+    # extern int TimerAlarm(clockid_t __id, const struct _itimer *__itime, struct _itimer *__otime);
+	def timer_alarm(self):
+		i = self.util.choice(self.timer_ids)
+		flags = 0
+		itime = itimer()
+		oitimer = itimer()
+		ret = self.libc.TimerAlarm(i,byref(itime),byref(oitimer))
+		if (ret != -1):
+			print("TimerAlarm ok", ret)
+		else:
+			print("TimerAlarm failed") 
+
+	# extern int TimerTimeout(clockid_t __id, int __flags, const struct sigevent *__notify, const _Uint64t *__ntime,_Uint64t *__otime);
+	def timer_timeout(self):
+		i = self.util.choice(self.timer_ids)
+		flags = 0
+		notify = sigevent()
+		__ntime = c_ulong()
+		__otime = c_ulong()
+		ret = self.libc.TimerTimeout(i,flags,byref(notify),byref(__ntime),byref(__otime))
+		if (ret != -1):
+			print("TimerTimeout ok", ret)
+		else:
+			print("TimerTimeout failed") 		
+
+
+	############################ Sync Methods ##################################
+
+
+
 	############################ Clock Methods ##################################
-	# TODO
 	def clock_adjust(self):
 		# ClockAdjust(clockid_t __id, const struct _clockadjust *_new, struct _clockadjust *__old);
 		__id = c_ulong()
 
 	# QNET kernel stuff #########################################################
+
+	#extern int NetCred(int __coid, const struct _client_info *__info);
 	def net_cred(self):
-		#extern int NetCred(int __coid, const struct _client_info *__info);
-		coid = 0
+		coid = self.util.choice(self.channel_ids)
 		ci = _client_info()
+		ret = self.libc.NetCred(coid,byref(ci))
+		if (ret != -1):
+			print("NetCred ok", ret)
+		else:
+			print("NetCred failed") 	
 
+	#extern int NetVtid(int __vtid, const struct _vtid_info *__info);
 	def net_vtid(self):
-		__vtid = 0
+		__vtid = self.util.choice(self.channel_ids)
 		__info = _vtid_info()
-		#extern int NetVtid(int __vtid, const struct _vtid_info *__info);
+		ret = self.libc.NetVtid(__vtid,byref(__info))
+		if (ret != -1):
+			print("NetVtid ok", ret)
+		else:
+			print("NetVtid failed") 			
 
+	# extern int NetUnblock(int __vtid);
 	def net_unblock(self):
-		# extern int NetUnblock(int __vtid);
 		vtid = 0
+		ret = self.libc.NetUnblock(vtid)
+		if (ret != -1):
+			print("NetUnblock ok", ret)
+		else:
+			print("NetUnblock failed") 	
 
+	# extern int NetInfoscoid(int __local_scoid, int __remote_scoid);
 	def net_info_scoid(self):
-		# __remote_scoid - Can't find this defined anywhere.
-		# extern int NetInfoscoid(int __local_scoid, int __remote_scoid);
-		pass
+		scoid = self.util.choice(self.channel_ids)
+		__remote_scoid = self.util.choice(self.channel_ids)
+		ret = self.libc.NetInfoscoid(scoid,__remote_scoid)
+		if (ret != -1):
+			print("NetInfoscoid ok", ret)
+		else:
+			print("NetInfoscoid failed") 	
 
-	
+	# extern int NetSignalKill(void *sigdata, struct _cred_info *cred);
+	def net_signal_skill(self):
+		sigdata = create_string_buffer(256)
+		cred = _cred_info()
+		ret = self.libc.NetSignalKill(sigdata,byref(cred))
+		if (ret != -1):
+			print("NetSignalKill ok", ret)
+		else:
+			print("NetSignalKill failed") 			
+
 
 if __name__ == "__main__":
 	syscall = Syscall()
-	syscall.channel_create()
-	syscall.channel_create_r()
-	syscall.channel_create_ext()
-	syscall.channel_destory()
-	syscall.connect_attach()
-	syscall.connect_attach_ext()
-	syscall.connect_server_info()
-	syscall.connect_client_info()
-	syscall.connect_flags()
-	syscall.channel_conn_attr()
-	syscall.msg_send()
-	syscall.msg_send_pulse()
-	#syscall.msg_receive()
-	#syscall.msg_receive_pulse()
-	syscall.msg_key_data()
-	syscall.msg_send_async_gbl()
-	syscall.msg_send_async()
-	#syscall.msg_receive_async_gbl()
-	syscall.msg_pause()
-	#syscall.signal_kill()
-	syscall.signal_return()
-	syscall.signal_fault()
-	syscall.signal_action()
+
+	do_channels = False
+	do_msging = False
+	do_threads = False
+	do_signals = False # This seems to cause a kernel panic
+	do_interupts = False
+	do_scheduling = False
+	do_qnet = False
+
+	do_timer = True
+	do_clock = False
+	do_sync = False
+
+	if do_channels:
+		syscall.channel_create()
+		syscall.channel_create_r()
+		syscall.channel_create_ext()
+		syscall.channel_destory()
+		syscall.connect_attach()
+		syscall.connect_attach_ext()
+		syscall.connect_server_info()
+		syscall.connect_client_info()
+		syscall.connect_flags()
+		syscall.channel_conn_attr()
+	
+	if do_msging:
+		syscall.msg_send()
+		syscall.msg_send_pulse()
+		#syscall.msg_receive()
+		#syscall.msg_receive_pulse()
+		syscall.msg_key_data()
+		syscall.msg_send_async_gbl()
+		syscall.msg_send_async()
+		#syscall.msg_receive_async_gbl()
+		syscall.msg_pause()
+
+	if do_threads:
+		syscall.thread_ctl()
+		syscall.thread_ctl_ext()
+
+	if do_signals:
+		syscall.signal_kill()
+		syscall.signal_return()
+		#syscall.signal_fault() # This causes the crash
+		syscall.signal_action()
+
+	if do_interupts:
+		syscall.interupt_hook_trace()
+		syscall.interupt_hook_idle() 
+		syscall.interupt_hook_idle2()
+		syscall.interupt_hook_overdrive_event()
+		syscall.interupt_attach_event()
+
+	if do_scheduling:
+		syscall.scheduler_info()
+		syscall.scheduler_get()
+		syscall.scheduler_set()
+		syscall.scheduler_yield()
+		syscall.scheduler_ctl()
+		syscall.scheduler_job_create()
+		syscall.scheduler_job_destroy()
+		syscall.scheduler_waypoint()
+		syscall.scheduler_waypoint2()
+
+	if do_qnet:
+		syscall.net_cred()
+		syscall.net_vtid()
+		syscall.net_unblock()
+		syscall.net_info_scoid()
+		syscall.net_signal_skill()
+
+
+	if do_timer:
+		syscall.timer_create()
+		#syscall.timer_settime() - causes coredump
+		syscall.timer_alarm()
+		syscall.timer_timeout()
+		syscall.timer_info()
+		syscall.timer_destroy()

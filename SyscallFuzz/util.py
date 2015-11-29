@@ -25,13 +25,16 @@ class Util:
 	def choice(self,arr):
 		return arr[self.R(len(arr))]
 
-	def chance(self):
+	def chance(self,n):
 		if self.R(n)==0:
 			return True
 		else:
 			return False
 
 	def randint(self):
+		pass
+
+	def corner_case(self):
 		pass
 
 	def get_all_chids(self):
