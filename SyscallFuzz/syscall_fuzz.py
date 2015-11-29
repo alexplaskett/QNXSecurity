@@ -263,6 +263,15 @@ class timerinfo(Structure):
 	("sigevent",sigevent)
 	]
 
+class _sync_attr(Structure):
+	_field_ = [
+	("protocol", c_ulong),
+	("flags", c_ulong),
+	("__prioceiling", c_ulong),
+	("__clockid", c_ulong),
+	("reserved", c_ulong),
+	]
+
 class Syscall:
 
 	def __init__(self):
@@ -1420,6 +1429,106 @@ class Syscall:
 
 	############################ Sync Methods ##################################
 
+	# extern int SyncTypeCreate(unsigned __type, sync_t *__sync, const struct _sync_attr *__attr);
+	def sync_type_create(self):
+		t = self.util.R(4)
+		sync = nto_job_t()
+		attr = _sync_attr()
+		ret = self.libc.SyncTypeCreate(t,byref(sync),byref(attr))
+		if (ret != -1):
+			print("SyncTypeCreate ok", ret)
+		else:
+			print("SyncTypeCreate failed") 			
+
+	# extern int SyncDestroy(sync_t *__sync);
+
+	# extern int SyncCtl(int __cmd, sync_t *__sync, void *__data);
+	def sync_ctl(self):
+		cmd = self.util.R(5)
+		sync = nto_job_t()
+		data = create_string_buffer(256)
+		ret = self.libc.SyncCtl(cmd,byref(sync),data)
+		if (ret != -1):
+			print("SyncCtl ok", ret)
+		else:
+			print("SyncCtl failed") 		
+
+	# extern int SyncMutexEvent(sync_t *__sync, struct sigevent *event);
+	def sync_mutex_event(self):
+		sync = nto_job_t()
+		event = sigevent()
+		ret = self.libc.SyncMutexEvent(byref(sync),byref(event))
+		if (ret != -1):
+			print("SyncMutexEvent ok", ret)
+		else:
+			print("SyncMutexEvent failed") 		
+
+	# extern int SyncMutexLock(sync_t *__sync);
+	def sync_mutex_lock(self):
+		sync = nto_job_t()
+		ret = self.libc.SyncMutexLock(byref(sync))
+		if (ret != -1):
+			print("SyncMutexLock ok", ret)
+		else:
+			print("SyncMutexLock failed") 		
+
+	# extern int SyncMutexUnlock(sync_t *__sync);			
+	def sync_mutex_unlock(self):
+		sync = nto_job_t()
+		ret = self.libc.SyncMutexUnlock(byref(sync))
+		if (ret != -1):
+			print("SyncMutexUnlock ok", ret)
+		else:
+			print("SyncMutexUnlock failed")
+
+	# extern int SyncMutexRevive(sync_t *__sync);
+	def sync_mutex_revive(self):
+		sync = nto_job_t()
+		ret = self.libc.SyncMutexRevive(byref(sync))
+		if (ret != -1):
+			print("SyncMutexRevive ok", ret)
+		else:
+			print("SyncMutexRevive failed")		
+
+	# extern int SyncCondvarWait(sync_t *__sync, sync_t *__mutex);
+
+	def sync_condvar_wait(self):
+		sync = nto_job_t()
+		__mutex = nto_job_t()
+		ret = self.libc.SyncCondvarWait(byref(sync),byref(__mutex))
+		if (ret != -1):
+			print("SyncCondvarWait ok", ret)
+		else:
+			print("SyncCondvarWait failed")		
+
+	# extern int SyncCondvarSignal(sync_t *__sync, int __all);
+	def sync_condvar_signal(self):
+		sync = nto_job_t()
+		__all = 0
+		ret = self.libc.SyncCondvarSignal(byref(sync),__all)
+		if (ret != -1):
+			print("SyncCondvarSignal ok", ret)
+		else:
+			print("SyncCondvarSignal failed")		
+
+	# extern int SyncSemPost(sync_t *__sync);
+	def sync_sem_post(self):
+		sync = nto_job_t()
+		ret = self.libc.SyncSemPost(byref(sync))
+		if (ret != -1):
+			print("SyncSemPost ok", ret)
+		else:
+			print("SyncSemPost failed")		
+
+	# extern int SyncSemWait(sync_t *__sync, int __tryto);
+	def sync_sem_wait(self):
+		sync = nto_job_t()
+		__tryto = 0
+		ret = self.libc.SyncSemWait(byref(sync),__tryto)
+		if (ret != -1):
+			print("SyncSemWait ok", ret)
+		else:
+			print("SyncSemWait failed")		
 
 
 	############################ Clock Methods ##################################
@@ -1490,9 +1599,9 @@ if __name__ == "__main__":
 	do_scheduling = False
 	do_qnet = False
 
-	do_timer = True
+	do_timer = False
 	do_clock = False
-	do_sync = False
+	do_sync = True
 
 	if do_channels:
 		syscall.channel_create()
@@ -1560,3 +1669,15 @@ if __name__ == "__main__":
 		syscall.timer_timeout()
 		syscall.timer_info()
 		syscall.timer_destroy()
+
+	if do_sync:
+		syscall.sync_type_create()
+		syscall.sync_ctl()
+		syscall.sync_mutex_event()
+		syscall.sync_mutex_lock()
+		syscall.sync_mutex_unlock()
+		syscall.sync_mutex_revive()
+		syscall.sync_condvar_wait()
+		syscall.sync_condvar_signal()
+		syscall.sync_sem_post()
+		#syscall.sync_sem_wait() - blocks
