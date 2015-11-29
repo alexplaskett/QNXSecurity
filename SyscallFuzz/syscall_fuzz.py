@@ -72,8 +72,12 @@ class _channel_connect_attr(Union):
 #define _NTO_CHF_ASYNC_NONBLOCK		0x0200
 #define _NTO_CHF_ASYNC				0x0400
 #define _NTO_CHF_GLOBAL				0x0800
+#define _NTO_CHF_PRIVATE			0x1000u
+#define _NTO_CHF_MSG_PAUSING		0x2000u
+#define _NTO_CHF_SIG_RESTART		0x4000u
+#define _NTO_CHF_UNBLOCK_TIMER		0x8000u
 
-CHAN_FLAGS = [0x0001,0x0002,0x0004,0x0008,0x0010,0x0020,0x0040,0x0080,0x0100,0x0200,0x0400,0x0800]
+CHAN_FLAGS = [0x0001,0x0002,0x0004,0x0008,0x0010,0x0020,0x0040,0x0080,0x0100,0x0200,0x0400,0x0800,0x1000,0x2000,0x4000,0x8000]
 
 
 # Conn flags
@@ -84,8 +88,10 @@ CHAN_FLAGS = [0x0001,0x0002,0x0004,0x0008,0x0010,0x0020,0x0040,0x0080,0x0100,0x0
 #define _NTO_COF_NONBLOCK		0x0100
 #define _NTO_COF_ASYNC			0x0200
 #define _NTO_COF_GLOBAL			0x0400
+#define _NTO_COF_NOEVENT		0x0800
+#define _NTO_COF_INSECURE		0x1000
 
-CONN_FLAGS = [0x0001,0x0002,0x0040,0x0080,0x0100,0x0200,0x0400]
+CONN_FLAGS = [0x0001,0x0002,0x0040,0x0080,0x0100,0x0200,0x0400,0x0800,0x1000]
 
 
 
@@ -272,6 +278,20 @@ class _sync_attr(Structure):
 	("reserved", c_ulong),
 	]
 
+class clockadjust(Structure):
+	_field_ = [
+	("tick_count", c_ulong),
+	("tick_nsec_inc", c_ulong),
+	]
+
+class _client_able(Structure):
+	_field_ = [
+	("ability", c_ulong),
+	("flags", c_ulong),	
+	("range_lo", c_ulong),
+	("range_hi", c_ulong),	
+	]
+
 class Syscall:
 
 	def __init__(self):
@@ -281,6 +301,7 @@ class Syscall:
 		self.util = Util()
 		self.scoids = []
 		self.timer_ids = [0]
+		self.connection_ids = []
 
 	# Not in neutrino.h
 	def cache_flush(self):
@@ -310,7 +331,7 @@ class Syscall:
 	#extern int ConnectFlags_r(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
 	#extern int ChannelConnectAttr(unsigned __id, union _channel_connect_attr *__old_attr, union _channel_connect_attr *__new_attr, unsigned __flags);
 	
-
+    # https://developer.blackberry.com/native/reference/core/com.qnx.doc.neutrino.lib_ref/topic/c/channelcreate.html
 	def channel_create(self):
 		flags = self.util.choice(CHAN_FLAGS) # Should OR flags together
 		ret = self.libc.ChannelCreate(flags)
@@ -320,7 +341,6 @@ class Syscall:
 		else:
 			print("ChannelCreate failed")
 
-	# Whats the _r methods for?
 	def channel_create_r(self):
 		flags = self.util.choice(CHAN_FLAGS)
 		ret = self.libc.ChannelCreate_r(flags)
@@ -334,33 +354,42 @@ class Syscall:
 	def channel_create_ext(self):
 		# extern int ChannelCreateExt(unsigned __flags, mode_t __mode, size_t __bufsize, unsigned __maxnumbuf, const struct sigevent *__ev, struct _cred_info *__cred);
 		flags = self.util.choice(CHAN_FLAGS)
-		mode = 0 				# access permissions
+		mode = self.util.R(0xffffffff)
 		bufsize = self.util.R(0xffffffff)				
 		maxnumbuf = self.util.R(0xffffffff)
-		# TODO: Sort out structs
-		# sigevent *
-		# cred_info *
+		ev = sigevent()
+		ev.sival_int = self.util.R(0xffffffff)
+		ev.sival_ptr = self.util.R(0xffffffff)
+
+		cred = _cred_info()
+
 		print("Bufsize = ",bufsize)
 		print("Maxnumbuf = ",maxnumbuf)
-		ret = self.libc.ChannelCreateExt(flags,mode,bufsize,maxnumbuf,0,0)
+		ret = self.libc.ChannelCreateExt(flags,mode,bufsize,maxnumbuf,byref(ev),byref(cred))
 		if (ret != -1):
 			print("ChannelCreateExt coid = ", ret)
 			self.channel_ids.append(ret)
 		else:
 			print("ChannelCreateExt failed")
 
+    # http://www.qnx.com/developers/docs/6.3.2/neutrino/lib_ref/c/channeldestroy.html
 	def channel_destory(self):
 		chid = self.util.choice(self.channel_ids)
+		if (self.util.chance(4)):
+			chid = self.util.R(0xffffffff)
 		ret = self.libc.ChannelDestroy(chid)
 		if (ret != 1):
 			print("ChannelDestroy worked")
 
 	def channel_destroy_r(self):
 		chid = self.util.choice(self.channel_ids)
+		if (self.util.chance(4)):
+			chid = self.util.R(0xffffffff)
 		ret = self.libc.ChannelDestroy_r(chid)
 		if (ret != 1):
 			print("ChannelDestroy_r worked")
 
+	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectattach.html
 	def connect_attach(self):
 		nd = 0
 		pid = self.util.choice(self.pids)
@@ -382,6 +411,7 @@ class Syscall:
 		ret = self.libc.ConnectAttach_r(nd,pid,chid,index,flags)
 		if (ret != -1):
 			print("ConnectAttach = ", ret)
+			self.connection_ids.append(ret)
 		else:
 			print("ConnectAttach failed")
 
@@ -396,15 +426,30 @@ class Syscall:
 		index = 0
 		flags = self.util.choice(CONN_FLAGS)	
 		
-		# TODO: Fix the variables in this struct
 		cd = _asyncmsg_connection_descriptor()
+		cd.flags = self.util.R(0xffffffff)
+		cd.senq = self.util.R(0xffffffff)
+		cd.senq_size = self.util.R(0xffffffff)
+		cd.sendq_head = self.util.R(0xffffffff)
+		cd.sendq_tail = self.util.R(0xffffffff)
+		cd.sendq_free = self.util.R(0xffffffff)
+		cd.err = self.util.R(0xffffffff)
+		ev = sigevent()
+		cd.ev = ev
+		cd.num_curmsg = self.util.R(0xffffffff)
+		cd.ttimer = self.util.R(0xffffffff)
+		cd.block_con = self.util.R(0xffffffff)
+		cd.mu = self.util.R(0xffffffff)
+		cd.reserve = 0
 
 		ret = self.libc.ConnectAttach_r(nd,pid,chid,index,flags,cd)
 		if (ret != -1):
 			print("ConnectAttachExt = ", ret)
+			self.connection_ids.append(ret)
 		else:
 			print("ConnectAttachExt failed")	
 
+	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectdetach.html
 	def connect_detach(self):
 		coid = self.util.choice(self.channel_ids)
 		ret = self.libc.ConnectDetach(coid)
@@ -421,7 +466,7 @@ class Syscall:
 		else:
 			print("ConnectDetach_r failed")	
 
-
+    # http://www.qnx.com/developers/docs/6.4.0/neutrino/lib_ref/c/connectserverinfo.html
 	def connect_server_info(self):
 		##extern int ConnectServerInfo(pid_t __pid, int __coid, struct _server_info *__info);
 		pid = self.util.choice(self.pids)
@@ -448,8 +493,7 @@ class Syscall:
 		else:
 			print("ConnectServerInfo_r failed")	
 
-	# ngroups could potentially overflow here.. fixed size in the struct passed.
-	# These functions are currently broken
+	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectclientinfo.html
 	def connect_client_info(self):
 		#extern int ConnectClientInfo(int __scoid, struct _client_info *__info, int __ngroups);
 		scoid = self.util.choice(self.scoids)
@@ -461,7 +505,7 @@ class Syscall:
 		else:
 			print("ConnectClientInfo failed")	
 
-	# ngroups could potentially overflow here.. fixed size in the struct passed.
+	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectclientinfo.html
 	def connect_client_info_r(self):
 		#extern int ConnectClientInfo(int __scoid, struct _client_info *__info, int __ngroups);
 		scoid = self.util.choice(self.scoids)
@@ -478,8 +522,8 @@ class Syscall:
 		pid = self.util.choice(self.pids)
 		coid = self.util.choice(self.channel_ids)
 		# TODO: Fix mask / bits here
-		mask = 0
-		bits = 0
+		mask = self.util.R(0xffffffff)
+		bits = self.util.R(0xffffffff)
 		ret = self.libc.ConnectFlags(pid,coid,mask,bits)
 		if (ret != -1):
 			print("ConnectFlags ok = ", ret)
@@ -492,8 +536,8 @@ class Syscall:
 		pid = self.util.choice(self.pids)
 		coid = self.util.choice(self.channel_ids)
 		# TODO: Fix mask / bits here
-		mask = 0
-		bits = 0
+		mask = self.util.R(0xffffffff)
+		bits = self.util.R(0xffffffff)
 		ret = self.libc.ConnectFlags_r(pid,coid,mask,bits)
 		if (ret != -1):
 			print("ConnectFlags_r ok = ", ret)
@@ -506,15 +550,49 @@ class Syscall:
 		# #extern int ChannelConnectAttr(unsigned __id, union _channel_connect_attr *__old_attr, union _channel_connect_attr *__new_attr, unsigned __flags);
 		__id = self.util.choice(self.channel_ids)
 
-		# TODO: Fill in structs here
 		__old_attr = _channel_connect_attr()
+		__old_attr.flags = self.util.R(0xffffffff)
+		__old_attr.mode_t = self.util.R(0xffffffff)
+		__old_attr.bufsize = self.util.R(0xffffffff)
+		__old_attr.maxbuf = self.util.R(0xffffffff)
+		ev = sigevent()
+		__old_attr.num_curmsgs = self.util.R(0xffffffff)
+		cred = _cred_info()
+		__old_attr.cred = cred
+
 		__new_attr = _channel_connect_attr()
+
+		__new_attr = _channel_connect_attr()
+		__new_attr.flags = self.util.R(0xffffffff)
+		__new_attr.mode_t = self.util.R(0xffffffff)
+		__new_attr.bufsize = self.util.R(0xffffffff)
+		__new_attr.maxbuf = self.util.R(0xffffffff)
+		ev = sigevent()
+		__new_attr.num_curmsgs = self.util.R(0xffffffff)
+		cred = _cred_info()
+		__new_attr.cred = cred
+
 		flags = self.util.choice(CHAN_CONNECT_FLAGS)
 		ret = self.libc.ChannelConnectAttr(__id,__old_attr,__new_attr,flags)
 		if (ret != -1):
 			print("ChannelConnectAttr ok = ", ret)
 		else:
 			print("ChannelConnectAttr failed")	
+
+	# extern int ConnectClientInfoAble(int __scoid, struct _client_info **__info_pp, int flags, struct _client_able * const abilities, const int nable);
+	def connect_client_info_able(self):
+		__scoid = 0
+		__info_pp = c_ulong(0)
+		flags = 0
+		abilities = _client_able()
+		nable = self.util.R(0xffffffff)
+		ret = self.libc.ConnectClientInfoAble(__scoid,byref(__info_pp),flags,byref(abilities),nable)
+		if (ret != -1):
+			print("ConnectClientInfoAble ok = ", ret)
+		else:
+			print("ConnectClientInfoAble failed")			
+
+
 
 	################################ Messaging Methods ###############################
 
@@ -1138,7 +1216,7 @@ class Syscall:
 	# extern int ThreadCtl(int __cmd, void *__data);
 	def thread_ctl(self):
 		cmd = self.util.R(15)
-		data = create_string_buffer(256)
+		data = create_string_buffer(self.util.R(256))
 		ret = self.libc.ThreadCtl(cmd,data)
 		if (ret != -1):
 			print("ThreadCtl ok", ret)
@@ -1151,7 +1229,7 @@ class Syscall:
 		pid = self.util.choice(self.pids)
 		tid = 0
 		cmd = self.util.R(15)
-		data = create_string_buffer(256)
+		data = create_string_buffer(self.util.R(256))
 		ret = self.libc.ThreadCtlExt(cmd,data)
 		if (ret != -1):
 			print("ThreadCtlExt ok", ret)
@@ -1532,9 +1610,49 @@ class Syscall:
 
 
 	############################ Clock Methods ##################################
+
+	# extern int ClockTime(clockid_t __id, const _Uint64t *_new, _Uint64t *__old);
+	def clock_time(self):
+		i = 0
+		_new = c_uint64()
+		_old = c_uint64()
+		ret = self.libc.ClockTime(i,byref(_new),byref(_old))
+		if (ret != -1):
+			print("ClockTime ok", ret)
+		else:
+			print("ClockTime failed")		
+
 	def clock_adjust(self):
 		# ClockAdjust(clockid_t __id, const struct _clockadjust *_new, struct _clockadjust *__old);
-		__id = c_ulong()
+		__id = 0
+		_new = clockadjust()
+		_old = clockadjust()
+		ret = self.libc.ClockAdjust(__id,byref(_new),byref(_old))
+		if (ret != -1):
+			print("ClockAdjust ok", ret)
+		else:
+			print("ClockAdjust failed")		
+
+	# extern int ClockPeriod(clockid_t __id, const struct _clockperiod *_new, struct _clockperiod *__old, int __reserved);
+	def clock_period(self):
+		__id = 0
+		_new = clockadjust()
+		_old = clockadjust()
+		ret = self.libc.ClockPeriod(__id,byref(_new),byref(_old))
+		if (ret != -1):
+			print("ClockPeriod ok", ret)
+		else:
+			print("ClockPeriod failed")					
+
+	# extern int ClockId(pid_t __pid, int __tid);
+	def clock_id(self):
+		pid = self.util.choice(self.pids)
+		tid = 0
+		ret = self.libc.ClockId(pid,tid)
+		if (ret != -1):
+			print("ClockId ok", ret)
+		else:
+			print("ClockId failed")			
 
 	# QNET kernel stuff #########################################################
 
@@ -1591,17 +1709,17 @@ class Syscall:
 if __name__ == "__main__":
 	syscall = Syscall()
 
-	do_channels = False
+	do_channels = True
 	do_msging = False
-	do_threads = False
+	do_threads = True
 	do_signals = False # This seems to cause a kernel panic
-	do_interupts = False
+	do_interupts = True
 	do_scheduling = False
 	do_qnet = False
 
 	do_timer = False
 	do_clock = False
-	do_sync = True
+	do_sync = False
 
 	if do_channels:
 		syscall.channel_create()
@@ -1614,6 +1732,7 @@ if __name__ == "__main__":
 		syscall.connect_client_info()
 		syscall.connect_flags()
 		syscall.channel_conn_attr()
+		syscall.connect_client_info_able()
 	
 	if do_msging:
 		syscall.msg_send()
@@ -1681,3 +1800,8 @@ if __name__ == "__main__":
 		syscall.sync_condvar_signal()
 		syscall.sync_sem_post()
 		#syscall.sync_sem_wait() - blocks
+
+	if do_clock:
+		syscall.clock_id()
+		syscall.clock_adjust()
+		syscall.clock_period()
