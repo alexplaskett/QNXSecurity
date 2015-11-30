@@ -5,7 +5,6 @@ BB10 Libc exports
 TODO: 
 - Remote logging server
 - Add support for COID's outside of the process
-- Sync/Clock support
 while true; do python3.2 syscall_fuzz.py; done
 """
 
@@ -333,7 +332,11 @@ class Syscall:
 	
     # https://developer.blackberry.com/native/reference/core/com.qnx.doc.neutrino.lib_ref/topic/c/channelcreate.html
 	def channel_create(self):
-		flags = self.util.choice(CHAN_FLAGS) # Should OR flags together
+		flags = self.util.choice(CHAN_FLAGS) 
+
+		if (self.util.chance(2)):
+			flags = self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS)
+
 		ret = self.libc.ChannelCreate(flags)
 		if (ret != -1):
 			print("ChannelCreate coid = ", ret)
@@ -343,6 +346,10 @@ class Syscall:
 
 	def channel_create_r(self):
 		flags = self.util.choice(CHAN_FLAGS)
+
+		if (self.util.chance(2)):
+			flags = self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS)
+
 		ret = self.libc.ChannelCreate_r(flags)
 		if (ret != -1):
 			print("channel_create_r coid = ", ret)
@@ -354,6 +361,13 @@ class Syscall:
 	def channel_create_ext(self):
 		# extern int ChannelCreateExt(unsigned __flags, mode_t __mode, size_t __bufsize, unsigned __maxnumbuf, const struct sigevent *__ev, struct _cred_info *__cred);
 		flags = self.util.choice(CHAN_FLAGS)
+
+		flags |= 0x0200 # _NTO_CHF_ASYNC_NONBLOCK
+		flags |= 0x0800 # _NTO_CHF_GLOBAL
+
+		if (self.util.chance(4)):
+			flags = self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS)
+
 		mode = self.util.R(0xffffffff)
 		bufsize = self.util.R(0xffffffff)				
 		maxnumbuf = self.util.R(0xffffffff)
@@ -394,11 +408,19 @@ class Syscall:
 		nd = 0
 		pid = self.util.choice(self.pids)
 		chid = self.util.choice(self.channel_ids)
-		index = 0
+		index = self.util.R(0xffffffff)
+		if (self.util.chance(2)):
+			index = 1073741824 # _NTO_SIDE_CHANNEL
+
 		flags = self.util.choice(CONN_FLAGS)
+
+		if (self.util.chance(4)):
+			flags = self.util.choice(CONN_FLAGS) | self.util.choice(CONN_FLAGS)
+
 		ret = self.libc.ConnectAttach(nd,pid,chid,index,flags)
 		if (ret != -1):
 			print("ConnectAttach = ", ret)
+			self.connection_ids.append(ret)
 		else:
 			print("ConnectAttach failed")
 
@@ -406,8 +428,15 @@ class Syscall:
 		nd = 0
 		pid = self.util.choice(self.pids)
 		chid = self.util.choice(self.channel_ids)
-		index = 0
+		index = self.util.R(0xffffffff)
+		if (self.util.chance(2)):
+			index = 1073741824 # _NTO_SIDE_CHANNEL
+
 		flags = self.util.choice(CONN_FLAGS)
+
+		if (self.util.chance(4)):
+			flags = self.util.choice(CONN_FLAGS) | self.util.choice(CONN_FLAGS)
+
 		ret = self.libc.ConnectAttach_r(nd,pid,chid,index,flags)
 		if (ret != -1):
 			print("ConnectAttach = ", ret)
@@ -415,21 +444,25 @@ class Syscall:
 		else:
 			print("ConnectAttach failed")
 
-	# The struct passed to this method is really complicated and new code
-	# async method handling.
 	# This is undocumented
 	# extern int ConnectAttachExt(_Uint32t __nd, pid_t __pid, int __chid, unsigned __index, int __flags, struct _asyncmsg_connection_descriptor *__cd);
 	def connect_attach_ext(self):
 		nd = 0
 		pid = self.util.choice(self.pids)
 		chid = self.util.choice(self.channel_ids)
-		index = 0
-		flags = self.util.choice(CONN_FLAGS)	
+		index = self.util.R(0xffffffff)
+		if (self.util.chance(2)):
+			index = 1073741824 # _NTO_SIDE_CHANNEL
+
+		flags = self.util.choice(CONN_FLAGS)
+
+		if (self.util.chance(4)):
+			flags = self.util.choice(CONN_FLAGS) | self.util.choice(CONN_FLAGS)
 		
 		cd = _asyncmsg_connection_descriptor()
 		cd.flags = self.util.R(0xffffffff)
 		cd.senq = self.util.R(0xffffffff)
-		cd.senq_size = self.util.R(0xffffffff)
+		cd.sendq_size = self.util.R(0xffffffff)
 		cd.sendq_head = self.util.R(0xffffffff)
 		cd.sendq_tail = self.util.R(0xffffffff)
 		cd.sendq_free = self.util.R(0xffffffff)
@@ -442,7 +475,7 @@ class Syscall:
 		cd.mu = self.util.R(0xffffffff)
 		cd.reserve = 0
 
-		ret = self.libc.ConnectAttach_r(nd,pid,chid,index,flags,cd)
+		ret = self.libc.ConnectAttachExt(nd,pid,chid,index,flags,byref(cd))
 		if (ret != -1):
 			print("ConnectAttachExt = ", ret)
 			self.connection_ids.append(ret)
@@ -535,7 +568,6 @@ class Syscall:
 		#extern int ConnectFlags(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
 		pid = self.util.choice(self.pids)
 		coid = self.util.choice(self.channel_ids)
-		# TODO: Fix mask / bits here
 		mask = self.util.R(0xffffffff)
 		bits = self.util.R(0xffffffff)
 		ret = self.libc.ConnectFlags_r(pid,coid,mask,bits)
@@ -598,9 +630,9 @@ class Syscall:
 
 	def msg_send(self):
 		# extern int MsgSend(int __coid, const void *__smsg, int __sbytes, void *__rmsg, int __rbytes);
-		send_buf = create_string_buffer(10)
-		recv_buf = create_string_buffer(10)
-		coid = self.util.choice(self.channel_ids)
+		send_buf = create_string_buffer(self.util.R(0xffff))
+		recv_buf = create_string_buffer(self.util.R(0xffff))
+		coid = self.util.choice(self.connection_ids)
 		__smsg = send_buf
 		sbytes = len(__smsg)
 		__rmsg = recv_buf
@@ -613,9 +645,9 @@ class Syscall:
 
 	def msg_send_r(self):
 		# extern int MsgSend(int __coid, const void *__smsg, int __sbytes, void *__rmsg, int __rbytes);
-		send_buf = create_string_buffer(10)
-		recv_buf = create_string_buffer(10)
-		coid = self.util.choice(self.channel_ids)
+		send_buf = create_string_buffer(self.util.R(0xffff))
+		recv_buf = create_string_buffer(self.util.R(0xffff))
+		coid = self.util.choice(self.connection_ids)
 		__smsg = send_buf
 		sbytes = len(__smsg)
 		__rmsg = recv_buf
@@ -629,9 +661,9 @@ class Syscall:
 	# extern int MsgSendnc(int __coid, const void *__smsg, int __sbytes, void *__rmsg, int __rbytes);
 	# nc is non-cancelation point
 	def msg_send_nc(self):
-		send_buf = create_string_buffer(10)
-		recv_buf = create_string_buffer(10)
-		coid = self.util.choice(self.channel_ids)
+		send_buf = create_string_buffer(self.util.R(0xfffff))
+		recv_buf = create_string_buffer(self.util.R(0xfffff))
+		coid = self.util.choice(self.connection_ids)
 		__smsg = send_buf
 		sbytes = len(__smsg)
 		__rmsg = recv_buf
@@ -643,9 +675,9 @@ class Syscall:
 			print("MsgSendNc failed")		
 
 	def msg_send_nc_r(self):
-		send_buf = create_string_buffer(10)
-		recv_buf = create_string_buffer(10)
-		coid = self.util.choice(self.channel_ids)
+		send_buf = create_string_buffer(self.util.R(0xffff))
+		recv_buf = create_string_buffer(self.util.R(0xffff))
+		coid = self.util.choice(self.connection_ids)
 		__smsg = send_buf
 		sbytes = len(__smsg)
 		__rmsg = recv_buf
@@ -658,10 +690,12 @@ class Syscall:
 
 	#extern int MsgSendsv(int __coid, const void *__smsg, int __sbytes, const struct iovec *__riov, int __rparts);
 	def msg_send_sv(self):
-		coid = self.util.choice(self.channel_ids)
-		send_buf = create_string_buffer(10)
+		coid = self.util.choice(self.connection_ids)
+		send_buf = create_string_buffer(self.util.R(0xfffff))
 		sbytes = len(send_buf)
 		iov = iovec()
+		iov.iov_base = self.util.R(0xffffffff)
+		iov.iov_len = self.util.R(0xffffffff)
 		rparts = 0
 		ret = self.libc.MsgSendsv(coid,send_buf,sbytes,byref(iov),rparts)
 		if (ret != -1):
@@ -671,10 +705,12 @@ class Syscall:
 
 
 	def msg_send_sv_r(self):
-		coid = self.util.choice(self.channel_ids)
-		send_buf = create_string_buffer(10)
+		coid = self.util.choice(self.connection_ids)
+		send_buf = create_string_buffer(self.util.R(0xfffff))
 		sbytes = len(send_buf)
 		iov = iovec()
+		iov.iov_base = self.util.R(0xffffffff)
+		iov.iov_len = self.util.R(0xffffffff)
 		rparts = 0
 		ret = self.libc.MsgSendsv(coid,send_buf,sbytes,byref(iov),rparts)
 		if (ret != -1):
@@ -684,10 +720,12 @@ class Syscall:
 
 	# extern int MsgSendsvnc(int __coid, const void *__smsg, int __sbytes, const struct iovec *__riov, int __rparts);
 	def msg_send_svnc(self):
-		coid = self.util.choice(self.channel_ids)
-		send_buf = create_string_buffer(10)
+		coid = self.util.choice(self.connection_ids)
+		send_buf = create_string_buffer(self.util.R(0xfffff))
 		sbytes = len(send_buf)
 		iov = iovec()
+		iov.iov_base = self.util.R(0xffffffff)
+		iov.iov_len = self.util.R(0xffffffff)
 		rparts = 0
 		ret = self.libc.MsgSendsvnc(coid,send_buf,sbytes,byref(iov),rparts)
 		if (ret != -1):
@@ -696,10 +734,12 @@ class Syscall:
 			print("MsgSendsvnc failed")	
 
 	def msg_send_svnc_r(self):
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		send_buf = create_string_buffer(10)
 		sbytes = len(send_buf)
 		iov = iovec()
+		iov.iov_base = self.util.R(0xffffffff)
+		iov.iov_len = self.util.R(0xffffffff)
 		rparts = 0
 		ret = self.libc.MsgSendsvnc_r(coid,send_buf,sbytes,byref(iov),rparts)
 		if (ret != -1):
@@ -710,10 +750,14 @@ class Syscall:
 	# extern int MsgSendv(int __coid, const struct iovec *__siov, int __sparts, const struct iovec *__riov, int __rparts);
 	# extern int MsgSendv_r(int __coid, const struct iovec *__siov, int __sparts, const struct iovec *__riov, int __rparts);
 	def msg_send_v(self):
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		siov = iovec()
+		siov.iov_base = self.util.R(0xffffffff)
+		siov.iov_len = self.util.R(0xffffffff)
 		sparts = 0
 		riov = iovec()
+		riov.iov_base = self.util.R(0xffffffff)
+		riov.iov_len = self.util.R(0xffffffff)
 		rparts = 0
 		ret = self.libc.MsgSendv(coid,byref(siov),sparts,byref(riov),rparts)
 		if (ret != -1):
@@ -722,10 +766,14 @@ class Syscall:
 			print("MsgSendv failed")	
 
 	def msg_send_v_r(self):
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		siov = iovec()
+		siov.iov_base = self.util.R(0xffffffff)
+		siov.iov_len = self.util.R(0xffffffff)
 		sparts = 0
 		riov = iovec()
+		riov.iov_base = self.util.R(0xffffffff)
+		riov.iov_len = self.util.R(0xffffffff)
 		rparts = 0
 		ret = self.libc.MsgSendv(coid,byref(siov),sparts,byref(riov),rparts)
 		if (ret != -1):
@@ -1004,8 +1052,10 @@ class Syscall:
 		__rcvid = 0
 		__oper = self.util.choice([0,1,2])
 		__key = self.util.R(0xffffffff)
-		__newkey = c_ulong()
+		__newkey = c_ulong(self.util.R(0xffffffff))
 		__iov = iovec()
+		__iov.iov_base = self.util.R(0xffffffff)
+		__iov.iov_len = self.util.R(0xffffffff)
 		__parts = self.util.R(0xffffffff)
 		ret = self.libc.MsgKeyData(__rcvid,__oper,__key,byref(__newkey),__iov,__parts)
 		if (ret != -1):
@@ -1017,8 +1067,10 @@ class Syscall:
 		__rcvid = 0
 		__oper = self.util.choice([0,1,2])
 		__key = self.util.R(0xffffffff)
-		__newkey = c_ulong()
+		__newkey = c_ulong(self.util.R(0xffffffff))
 		__iov = iovec()
+		__iov.iov_base = self.util.R(0xffffffff)
+		__iov.iov_len = self.util.R(0xffffffff)
 		__parts = self.util.R(0xffffffff)
 		ret = self.libc.MsgKeyData_r(__rcvid,__oper,__key,byref(__newkey),__iov,__parts)
 		if (ret != -1):
@@ -1706,20 +1758,53 @@ class Syscall:
 			print("NetSignalKill failed") 			
 
 
+	def trace_event(self):
+		code = self.util.R(0xffffffff)
+		c1 = self.util.R(0xffffffff)
+		c2 = self.util.R(0xffffffff)
+		c3 = self.util.R(0xffffffff)
+		c4 = self.util.R(0xffffffff)
+		c5 = self.util.R(0xffffffff)
+		c6 = self.util.R(0xffffffff)
+		ret = self.libc.TraceEvent(code,c1,c2,c3,c4,c5,c6)
+		if (ret != -1):
+			print("TraceEvent ok", ret)
+		else:
+			print("TraceEvent failed") 		
+
+	# TODO: CpuPageGet and CpuPageSet
+	def cpu_page_get(self):
+		ret = self.libc.__SysCpupageGet(self.util.R(0xffffffff))
+		if (ret != -1):
+			print("__SysCpupageGet ok", ret)
+		else:
+			print("__SysCpupageGet failed") 		
+
+	def cpu_page_set(self):
+		ret = self.libc.__SysCpupageSet(self.util.R(0xffffffff),self.util.R(0xffffffff))
+		if (ret != -1):
+			print("__SysCpupageSet ok", ret)
+		else:
+			print("__SysCpupageSet failed") 		
+
+
+
 if __name__ == "__main__":
 	syscall = Syscall()
 
 	do_channels = True
-	do_msging = False
+	do_msging = True
 	do_threads = True
-	do_signals = False # This seems to cause a kernel panic
+	do_signals = False 
 	do_interupts = True
 	do_scheduling = False
-	do_qnet = False
+	do_qnet = True
 
-	do_timer = False
-	do_clock = False
-	do_sync = False
+	do_timer = True
+	do_clock = True
+	do_sync = True
+
+	do_cpupage = True
 
 	if do_channels:
 		syscall.channel_create()
@@ -1735,7 +1820,7 @@ if __name__ == "__main__":
 		syscall.connect_client_info_able()
 	
 	if do_msging:
-		syscall.msg_send()
+		#syscall.msg_send()
 		syscall.msg_send_pulse()
 		#syscall.msg_receive()
 		#syscall.msg_receive_pulse()
@@ -1796,7 +1881,7 @@ if __name__ == "__main__":
 		syscall.sync_mutex_lock()
 		syscall.sync_mutex_unlock()
 		syscall.sync_mutex_revive()
-		syscall.sync_condvar_wait()
+		#syscall.sync_condvar_wait()
 		syscall.sync_condvar_signal()
 		syscall.sync_sem_post()
 		#syscall.sync_sem_wait() - blocks
@@ -1805,3 +1890,9 @@ if __name__ == "__main__":
 		syscall.clock_id()
 		syscall.clock_adjust()
 		syscall.clock_period()
+
+	syscall.trace_event()
+
+	if do_cpupage:
+		syscall.cpu_page_get()
+		syscall.cpu_page_set()
