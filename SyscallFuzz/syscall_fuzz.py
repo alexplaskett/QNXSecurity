@@ -6,6 +6,8 @@ TODO:
 - Remote logging server
 - Add support for COID's outside of the process
 while true; do python3.2 syscall_fuzz.py; done
+- Use timertimeout to do non-blocking?
+- Implement ConnectClientInfoExt
 """
 
 from ctypes import *
@@ -296,7 +298,7 @@ class Syscall:
 	def __init__(self):
 		self.libc = CDLL("libc.so")
 		self.channel_ids = [0,1,1073741824]
-		self.pids = [0]
+		self.pids = [0,1]
 		self.util = Util()
 		self.scoids = []
 		self.timer_ids = [0]
@@ -330,6 +332,11 @@ class Syscall:
 	#extern int ConnectFlags_r(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
 	#extern int ChannelConnectAttr(unsigned __id, union _channel_connect_attr *__old_attr, union _channel_connect_attr *__new_attr, unsigned __flags);
 	
+	# New calls
+	# extern int ConnectClientInfoExt(int __scoid, struct _client_info **__info_pp, int flags);
+	# extern int ClientInfoExtFree(struct _client_info **__info_pp);
+	# extern int ConnectClientInfoAble(int __scoid, struct _client_info **__info_pp, int flags, struct _client_able * const abilities, const int nable);
+
     # https://developer.blackberry.com/native/reference/core/com.qnx.doc.neutrino.lib_ref/topic/c/channelcreate.html
 	def channel_create(self):
 		flags = self.util.choice(CHAN_FLAGS) 
@@ -624,6 +631,27 @@ class Syscall:
 		else:
 			print("ConnectClientInfoAble failed")			
 
+
+	# extern int ConnectClientInfoExt(int __scoid, struct _client_info **__info_pp, int flags);
+	def connect_client_info_ext(self):
+		scoid = self.util.choice(self.scoids)
+		ci = _client_info()
+		flags = 1
+		ret = self.libc.ConnectClientInfoExt(scoid,byref(ci),flags)
+		if (ret != -1):
+			print("ConnectClientInfoExt ok = ", ret)
+		else:
+			print("ConnectClientInfoExt failed")
+
+	#extern int ClientInfoExtFree(struct _client_info **__info_pp);
+	def client_info_ext_free(self):
+		value = c_ulong
+		ptr = POINTER(value)()
+		ret = self.libc.ClientInfoExtFree(byref(ptr))
+		if (ret != -1):
+			print("ClientInfoExtFree ok = ", ret)
+		else:
+			print("ClientInfoExtFree failed")		
 
 
 	################################ Messaging Methods ###############################
@@ -985,7 +1013,7 @@ class Syscall:
 	#extern int MsgSendPulse(int __coid, int __priority, int __code, int __value);
 	#extern int MsgSendPulse_r(int __coid, int __priority, int __code, int __value);
 	def msg_send_pulse(self):
-		__coid = self.util.choice(self.channel_ids)
+		__coid = self.util.choice(self.connection_ids)
 		__priority = self.util.R(0xffffffff)
 		__code = self.util.R(0xffffffff) # TODO: find out pulse codes
 		__value = self.util.R(0xffffffff)
@@ -1102,9 +1130,13 @@ class Syscall:
 
 	# extern int MsgSendAsyncGbl(int __coid, const void *__smsg, size_t __sbytes, unsigned __msg_prio);
 	def msg_send_async_gbl(self):
-		__coid = self.util.choice(self.channel_ids)
+		__coid = self.util.choice(self.connection_ids)
 		__smsg = create_string_buffer(256)
-		sbytes = len(__smsg)
+		if self.util.chance(2):
+			sbytes = len(__smsg)
+		else:
+			sbytes = self.util.R(0xffffffff)
+
 		__msg_prio = 0
 		ret = self.libc.MsgSendAsyncGbl(__coid,__smsg,sbytes,__msg_prio)
 		if (ret != -1):
@@ -1115,7 +1147,7 @@ class Syscall:
 
 	# extern int MsgSendAsync(int __coid);
 	def msg_send_async(self):
-		__coid = self.util.choice(self.channel_ids)
+		__coid = self.util.choice(self.connection_ids)
 		ret = self.libc.MsgSendAsync(__coid)
 		if (ret != -1):
 			print("MsgSendAsync ok", ret)
@@ -1193,6 +1225,7 @@ class Syscall:
 			print("SignalKill_r failed")		
 
 	# extern int SignalReturn(struct _sighandler_info *__info);
+	# This allows control of PC after a return has occured. 
 	def signal_return(self):
 		__info = _sighandler_info()
 		ret = self.libc.SignalReturn(__info)
@@ -1205,7 +1238,7 @@ class Syscall:
     # This is undocumented
 	def signal_fault(self):
 		signo = self.util.R(64)
-		regs = c_ulong() # RD_VERIFY_PTR(act, kap->regs, sizeof(CPU_REGISTERS));
+		regs = c_ulong() 
 		refaddr = c_ulong()
 		ret = self.libc.SignalFault(signo,byref(regs),byref(refaddr))
 		if (ret != -1):
@@ -1214,6 +1247,7 @@ class Syscall:
 			print("SignalFault failed")		
 
     # extern int SignalAction(pid_t __pid, void (*__sigstub)(void), int __signo, const struct sigaction *__act, struct sigaction *__oact);
+	# implement this 
 	def signal_action(self):
 		pid = self.util.choice(self.pids)
 		sigstub = c_ulong()
@@ -1793,18 +1827,19 @@ if __name__ == "__main__":
 	syscall = Syscall()
 
 	do_channels = True
-	do_msging = True
+	do_msging = False
 	do_threads = True
 	do_signals = False 
-	do_interupts = True
+	do_interupts = False
 	do_scheduling = False
-	do_qnet = True
+	do_qnet = False
 
-	do_timer = True
-	do_clock = True
-	do_sync = True
+	do_timer = False
+	do_clock = False
+	do_sync = False
 
-	do_cpupage = True
+	do_cpupage = False
+	do_tracelogging = False
 
 	if do_channels:
 		syscall.channel_create()
@@ -1818,6 +1853,8 @@ if __name__ == "__main__":
 		syscall.connect_flags()
 		syscall.channel_conn_attr()
 		syscall.connect_client_info_able()
+		syscall.connect_client_info_ext()
+		syscall.client_info_ext_free()
 	
 	if do_msging:
 		#syscall.msg_send()
@@ -1826,7 +1863,7 @@ if __name__ == "__main__":
 		#syscall.msg_receive_pulse()
 		syscall.msg_key_data()
 		syscall.msg_send_async_gbl()
-		syscall.msg_send_async()
+		#syscall.msg_send_async()
 		#syscall.msg_receive_async_gbl()
 		syscall.msg_pause()
 
@@ -1835,11 +1872,12 @@ if __name__ == "__main__":
 		syscall.thread_ctl_ext()
 
 	if do_signals:
-		syscall.signal_kill()
-		syscall.signal_return()
+		#syscall.signal_kill()
+		syscall.signal_return() # Can return to anywhere
 		#syscall.signal_fault() # This causes the crash
-		syscall.signal_action()
-
+		#syscall.signal_action()
+   
+    # All require root permissions
 	if do_interupts:
 		syscall.interupt_hook_trace()
 		syscall.interupt_hook_idle() 
@@ -1891,7 +1929,8 @@ if __name__ == "__main__":
 		syscall.clock_adjust()
 		syscall.clock_period()
 
-	syscall.trace_event()
+	if do_tracelogging:
+		syscall.trace_event()
 
 	if do_cpupage:
 		syscall.cpu_page_get()
