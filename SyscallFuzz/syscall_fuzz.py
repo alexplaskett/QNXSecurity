@@ -491,7 +491,7 @@ class Syscall:
 
 	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectdetach.html
 	def connect_detach(self):
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		ret = self.libc.ConnectDetach(coid)
 		if (ret != -1):
 			print("ConnectDetach ok = ", ret)
@@ -499,7 +499,7 @@ class Syscall:
 			print("ConnectDetach failed")	
 
 	def connect_detach_r(self):
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		ret = self.libc.ConnectDetach_r(coid)
 		if (ret != -1):
 			print("ConnectDetach_r ok = ", ret)
@@ -510,7 +510,7 @@ class Syscall:
 	def connect_server_info(self):
 		##extern int ConnectServerInfo(pid_t __pid, int __coid, struct _server_info *__info);
 		pid = self.util.choice(self.pids)
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		info = _msg_info()
 		ret = self.libc.ConnectServerInfo(pid,coid,byref(info))
 		if (ret != -1):
@@ -523,7 +523,7 @@ class Syscall:
 	def connect_server_info_r(self):
 		##extern int ConnectServerInfo(pid_t __pid, int __coid, struct _server_info *__info);
 		pid = self.util.choice(self.pids)
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		info = _msg_info()
 		ret = self.libc.ConnectServerInfo_r(pid,coid,byref(info))
 		if (ret != -1):
@@ -536,7 +536,7 @@ class Syscall:
 	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectclientinfo.html
 	def connect_client_info(self):
 		#extern int ConnectClientInfo(int __scoid, struct _client_info *__info, int __ngroups);
-		scoid = self.util.choice(self.scoids)
+		scoid = self.util.choice(self.connection_ids)
 		info = _client_info()
 		ngroups = self.util.R(0xffffffff)
 		ret = self.libc.ConnectClientInfo(scoid,byref(info),ngroups)
@@ -548,7 +548,7 @@ class Syscall:
 	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectclientinfo.html
 	def connect_client_info_r(self):
 		#extern int ConnectClientInfo(int __scoid, struct _client_info *__info, int __ngroups);
-		scoid = self.util.choice(self.scoids)
+		scoid = self.util.choice(self.connection_ids)
 		info = _client_info()
 		ngroups = self.util.R(0xffffffff)
 		ret = self.libc.ConnectClientInfo_r(scoid,byref(info),ngroups)
@@ -560,7 +560,7 @@ class Syscall:
 	def connect_flags(self):
 		#extern int ConnectFlags(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
 		pid = self.util.choice(self.pids)
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		# TODO: Fix mask / bits here
 		mask = self.util.R(0xffffffff)
 		bits = self.util.R(0xffffffff)
@@ -574,7 +574,7 @@ class Syscall:
 	def connect_flags_r(self):
 		#extern int ConnectFlags(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
 		pid = self.util.choice(self.pids)
-		coid = self.util.choice(self.channel_ids)
+		coid = self.util.choice(self.connection_ids)
 		mask = self.util.R(0xffffffff)
 		bits = self.util.R(0xffffffff)
 		ret = self.libc.ConnectFlags_r(pid,coid,mask,bits)
@@ -587,7 +587,7 @@ class Syscall:
 	# Undocumented function
 	def channel_conn_attr(self):
 		# #extern int ChannelConnectAttr(unsigned __id, union _channel_connect_attr *__old_attr, union _channel_connect_attr *__new_attr, unsigned __flags);
-		__id = self.util.choice(self.channel_ids)
+		__id = self.util.choice(self.connection_ids)
 
 		__old_attr = _channel_connect_attr()
 		__old_attr.flags = self.util.R(0xffffffff)
@@ -620,7 +620,7 @@ class Syscall:
 
 	# extern int ConnectClientInfoAble(int __scoid, struct _client_info **__info_pp, int flags, struct _client_able * const abilities, const int nable);
 	def connect_client_info_able(self):
-		__scoid = 0
+		__scoid = self.util.choice(self.connection_ids)
 		__info_pp = c_ulong(0)
 		flags = 0
 		abilities = _client_able()
@@ -634,7 +634,7 @@ class Syscall:
 
 	# extern int ConnectClientInfoExt(int __scoid, struct _client_info **__info_pp, int flags);
 	def connect_client_info_ext(self):
-		scoid = self.util.choice(self.scoids)
+		scoid = self.util.choice(self.connection_ids)
 		ci = _client_info()
 		flags = 1
 		ret = self.libc.ConnectClientInfoExt(scoid,byref(ci),flags)
@@ -826,9 +826,9 @@ class Syscall:
 	def msg_receive_r(self):
 		chid = self.util.choice(self.channel_ids)
 		__msg = create_string_buffer(10)
-		bytes = 0
+		l = len(__msg)
 		__info = _msg_info()
-		ret = self.libc.MsgReceive(chid,__msg,bytes,byref(__info))
+		ret = self.libc.MsgReceive(chid,__msg,l,byref(__info))
 		if (ret != -1):
 			print("MsgReceive_r ok = ", ret)
 		else:
@@ -1235,7 +1235,7 @@ class Syscall:
 			print("SignalReturn failed")		
 
     #extern int SignalFault(unsigned __sigcode, void *__regs, _Uintptrt __refaddr);
-    # This is undocumented
+    # This is undocumented and allows control of return addr
 	def signal_fault(self):
 		signo = self.util.R(64)
 		regs = c_ulong() 
@@ -1249,7 +1249,7 @@ class Syscall:
     # extern int SignalAction(pid_t __pid, void (*__sigstub)(void), int __signo, const struct sigaction *__act, struct sigaction *__oact);
 	# implement this 
 	def signal_action(self):
-		pid = self.util.choice(self.pids)
+		pid = self.util.chTimoice(self.pids)
 		sigstub = c_ulong()
 		signo = self.util.R(64)
 		__act = sigaction()
