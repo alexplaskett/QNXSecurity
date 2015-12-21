@@ -7,7 +7,7 @@ from ctypes import *
 import glob
 import shutil
 
-import devrandom
+from util import *
 
 # Script for fuzzing IPC endpoints on QNX
 # Uses /dev/name/local to get endpoints
@@ -38,7 +38,7 @@ class IPCFuzz:
 		self.init_endpoints()
 		self.nto_side_channel= 1073741824 # nto_side_channel (not sure this is correct)
 		self.crash_dir = "./crashes/"
-		self.dr = devrandom.devrandom()
+		self.util = Util()
 		self.is_simulator = False
 		self.clean_corefile()
 
@@ -111,11 +111,11 @@ class IPCFuzz:
 
 	# Stock set of message lengths (should reverse out lengths expected)
 	def message_size(self):
-		size = self.dr.R(3000)
+		size = self.util.R(3000)
 
-		if self.dr.chance(3):
+		if self.util.chance(3):
 			arr = [0x1c,512,1024,2046,4096]
-			size = self.dr.choice(arr)
+			size = self.util.choice(arr)
 
 		size = 28
 
@@ -164,7 +164,7 @@ class IPCFuzz:
 		print("++ Fuzzing endpoint ++", name)
 
 		try:
-			buf = self.dr.fuzz(os.urandom(size))
+			buf = self.util.fuzz(os.urandom(size))
 			self.testcase = buf
 		except:
 			buf = b"AAAAAAAAAAAAA"
