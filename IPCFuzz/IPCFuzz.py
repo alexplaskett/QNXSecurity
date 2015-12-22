@@ -12,24 +12,19 @@ from util import *
 # Script for fuzzing IPC endpoints on QNX
 # Uses /dev/name/local to get endpoints
 # Monitors /var/log/ for crashes
-#_tracelog crashes with 28 bytes on the device
-# phone-service crashes with 142 bytes or 2025 2777810.bin (can't repro)
-
-# Some endpoints perform blocking (led_control and battmgr_monitor)
-# Sim: Battmgr dies with this fuzzing too (kernel panic?) and I can't crash log it.
-
-# Endpoints Exposed
-# VirtualEventServer
-# battmgr (0x200, 0x203)
-# csm 
-# phone-service | 0x1000 - 0x8000 | 0x8002 | 0x8011 | 0x8010 | 0x9000, 0x9001, 0x10 Size 0x1C  
-# publisher-channel size 
 
 # <alex.plaskett@mwrinfosecurity.com>
 
 class ClientMsg(Structure):
 	_fields_ = [("msg_no", c_short), ("buffer", c_char * 1024)]
 
+class _name_attach(Structure):
+	_fields_ = [
+	("dpp", c_ulong),
+	("chid", c_ulong),
+    ("mntid", c_ulong),
+    ("zero", c_ulong)
+    ]
 
 class IPCFuzz:
 	def __init__(self):
@@ -58,7 +53,7 @@ class IPCFuzz:
 					# Device
 					"io-asr-bb10", 			# blocks
 					"dsi_server_primary", 	# blocks
-					"phone-service" 		# Crashes on both the sim and phone
+					"phone-service" 		
 					]
 
 		return blacklist
@@ -114,15 +109,14 @@ class IPCFuzz:
 		size = self.util.R(3000)
 
 		if self.util.chance(3):
-			arr = [0x1c,512,1024,2046,4096]
+			arr = [28,0x1c,512,1024,2046,4096]
 			size = self.util.choice(arr)
-
-		size = 28
 
 		print("msg size = ", size)
 		return size
 
 	def send_sync(self,coid,buf,size):
+		print(size)
 		ret = self.libc.MsgSend(coid,buf,size,0,0)
 		if ret == -1:
 			print("MsgSend failed")
@@ -164,8 +158,8 @@ class IPCFuzz:
 		print("++ Fuzzing endpoint ++", name)
 
 		try:
-			buf = self.util.fuzz(os.urandom(size))
-			self.testcase = buf
+			buf = str(os.urandom(size))
+			self.testcase = bytes(buf, 'UTF-8')
 		except:
 			buf = b"AAAAAAAAAAAAA"
 			self.testcase = buf
@@ -174,6 +168,7 @@ class IPCFuzz:
 		#self.fuzz_pulse(coid)
 
 	def save_testcase(self):
+		print(self.testcase)
 		fd = open(self.crash_dir + self.fn + ".bin","wb")
 		fd.write(self.testcase)
 		fd.close()
@@ -210,6 +205,7 @@ class IPCFuzz:
 				if not self.is_endpoint_ok("/dev/name/local/"+coid[1]):
 					print("++ Endpoint seems to have died ++", coid[1])
 					self.save_testcase()
+					self.squat_endpoint(coid[1])
 					sys.exit(0)
 			
 	# The coid that is exposed to all processes
@@ -220,6 +216,17 @@ class IPCFuzz:
 		buf = create_string_buffer(1024)
 		self.libc.memset(buf,0x42,1024)
 		libc.name_attach(0,buf,0)
+
+	def squat_endpoint(self,endpoint):
+		ret = self.libc.name_attach(0,bytes(endpoint, 'UTF-8'),0)
+		p = cast(ret,POINTER(_name_attach)).contents
+		buf = create_string_buffer(256)
+		print("Squatting Endpoint ", p.chid)
+		while True:
+			print("Receiving Messages")
+			rcvid = self.libc.MsgReceive(p.chid, buf, 10, 0)
+			print(buf)
+			print("After blocking")
 
 
 	def is_core_created(self):
