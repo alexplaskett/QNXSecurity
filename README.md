@@ -1,5 +1,4 @@
-# QNXSecurity
-QNX and BB10 Security Tools
+# QNX Security Tools
 
 FWAnalysis for tools used for static analysis of firmware
 
