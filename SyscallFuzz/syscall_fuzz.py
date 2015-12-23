@@ -5,9 +5,10 @@ BB10 Libc exports
 TODO: 
 - Remote logging server
 - Add support for COID's outside of the process
-while true; do python3.2 syscall_fuzz.py; done
 - Use timertimeout to do non-blocking?
 - Implement ConnectClientInfoExt
+- Add support for power parameters
+while true; do python3.2 syscall_fuzz.py; done
 """
 
 from ctypes import *
@@ -271,7 +272,7 @@ class timerinfo(Structure):
 	]
 
 class _sync_attr(Structure):
-	_field_ = [
+	_fields_ = [
 	("protocol", c_ulong),
 	("flags", c_ulong),
 	("__prioceiling", c_ulong),
@@ -280,7 +281,7 @@ class _sync_attr(Structure):
 	]
 
 class clockadjust(Structure):
-	_field_ = [
+	_fields_ = [
 	("tick_count", c_ulong),
 	("tick_nsec_inc", c_ulong),
 	]
@@ -293,6 +294,27 @@ class _client_able(Structure):
 	("range_hi", c_ulong),	
 	]
 
+class nto_power_range(Structure):
+	_fields_ = [
+	("load",c_ushort),
+	("duration",c_ushort)
+	]
+
+class nto_power_freq(Structure):
+	_fields_ = [
+	("performance",c_ulong),
+	("low",nto_power_range),
+	("high",nto_power_range)
+	]
+
+class nto_power_parameter(Structure):
+	_fields_ = [
+	("parameter_type",c_ushort),
+	("clusterid",c_ulong),
+	("spare",c_ulong),
+	("u",nto_power_freq)
+	]
+
 class Syscall:
 
 	def __init__(self):
@@ -300,9 +322,10 @@ class Syscall:
 		self.channel_ids = [0,1,1073741824]
 		self.pids = [0,1]
 		self.util = Util()
-		self.scoids = []
+		self.scoids = [0]
 		self.timer_ids = [0]
-		self.connection_ids = []
+		self.connection_ids = [0]
+		self.sync = nto_job_t() # global sync type
 
 	# Not in neutrino.h
 	def cache_flush(self):
@@ -1597,6 +1620,10 @@ class Syscall:
 	def sync_type_create(self):
 		t = self.util.R(4)
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		attr = _sync_attr()
 		ret = self.libc.SyncTypeCreate(t,byref(sync),byref(attr))
 		if (ret != -1):
@@ -1610,6 +1637,10 @@ class Syscall:
 	def sync_ctl(self):
 		cmd = self.util.R(5)
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		data = create_string_buffer(256)
 		ret = self.libc.SyncCtl(cmd,byref(sync),data)
 		if (ret != -1):
@@ -1620,6 +1651,10 @@ class Syscall:
 	# extern int SyncMutexEvent(sync_t *__sync, struct sigevent *event);
 	def sync_mutex_event(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		event = sigevent()
 		ret = self.libc.SyncMutexEvent(byref(sync),byref(event))
 		if (ret != -1):
@@ -1630,6 +1665,10 @@ class Syscall:
 	# extern int SyncMutexLock(sync_t *__sync);
 	def sync_mutex_lock(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		ret = self.libc.SyncMutexLock(byref(sync))
 		if (ret != -1):
 			print("SyncMutexLock ok", ret)
@@ -1639,6 +1678,10 @@ class Syscall:
 	# extern int SyncMutexUnlock(sync_t *__sync);			
 	def sync_mutex_unlock(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		ret = self.libc.SyncMutexUnlock(byref(sync))
 		if (ret != -1):
 			print("SyncMutexUnlock ok", ret)
@@ -1648,6 +1691,10 @@ class Syscall:
 	# extern int SyncMutexRevive(sync_t *__sync);
 	def sync_mutex_revive(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		ret = self.libc.SyncMutexRevive(byref(sync))
 		if (ret != -1):
 			print("SyncMutexRevive ok", ret)
@@ -1658,6 +1705,10 @@ class Syscall:
 
 	def sync_condvar_wait(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		__mutex = nto_job_t()
 		ret = self.libc.SyncCondvarWait(byref(sync),byref(__mutex))
 		if (ret != -1):
@@ -1668,6 +1719,10 @@ class Syscall:
 	# extern int SyncCondvarSignal(sync_t *__sync, int __all);
 	def sync_condvar_signal(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		__all = 0
 		ret = self.libc.SyncCondvarSignal(byref(sync),__all)
 		if (ret != -1):
@@ -1678,6 +1733,10 @@ class Syscall:
 	# extern int SyncSemPost(sync_t *__sync);
 	def sync_sem_post(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		ret = self.libc.SyncSemPost(byref(sync))
 		if (ret != -1):
 			print("SyncSemPost ok", ret)
@@ -1687,6 +1746,10 @@ class Syscall:
 	# extern int SyncSemWait(sync_t *__sync, int __tryto);
 	def sync_sem_wait(self):
 		sync = nto_job_t()
+
+		if self.util.chance(2):
+			sync = self.sync
+
 		__tryto = 0
 		ret = self.libc.SyncSemWait(byref(sync),__tryto)
 		if (ret != -1):
@@ -1806,7 +1869,6 @@ class Syscall:
 		else:
 			print("TraceEvent failed") 		
 
-	# TODO: CpuPageGet and CpuPageSet
 	def cpu_page_get(self):
 		ret = self.libc.__SysCpupageGet(self.util.R(0xffffffff))
 		if (ret != -1):
@@ -1819,15 +1881,43 @@ class Syscall:
 		if (ret != -1):
 			print("__SysCpupageSet ok", ret)
 		else:
-			print("__SysCpupageSet failed") 		
+			print("__SysCpupageSet failed")
 
+ 	#extern int PowerParameter(unsigned __id, unsigned __struct_len, const struct nto_power_parameter *__new,
+	#struct nto_power_parameter *__old);	
+	def power_param(self):
+		i = self.util.R(6)
+		__new = nto_power_parameter()
+		__old = nto_power_parameter()
+		if self.util.chance(2):
+			l = self.util.R(0xffffffff)
+		elif self.util.chance(2):
+			l = 0x28
+		else:
+			l = 0x24
 
+		ret = self.libc.PowerParameter(i,l,byref(__new),byref(__old))
+		if (ret != -1):
+			print("PowerParameter ok", ret)
+		else:
+			print("PowerParameter failed")
+
+	def power_active(self):
+		i = self.util.R(0xffffffff)
+		ret = self.libc.PowerSetActive(i)
+		if (ret != -1):
+			print("PowerSetActive ok", ret)
+		else:
+			print("PowerSetActive failed")
+		
 
 if __name__ == "__main__":
 	syscall = Syscall()
+	util = Util()
 
 	do_channels = True
 	do_msging = False
+
 	do_threads = True
 	do_signals = False 
 	do_interupts = False
@@ -1836,102 +1926,120 @@ if __name__ == "__main__":
 
 	do_timer = False
 	do_clock = False
-	do_sync = False
+	do_sync = True
 
 	do_cpupage = False
 	do_tracelogging = False
 
+	do_power = False
+
+	syscalls = []
+
 	if do_channels:
-		syscall.channel_create()
-		syscall.channel_create_r()
-		syscall.channel_create_ext()
-		syscall.channel_destory()
-		syscall.connect_attach()
-		syscall.connect_attach_ext()
-		syscall.connect_server_info()
-		syscall.connect_client_info()
-		syscall.connect_flags()
-		syscall.channel_conn_attr()
-		syscall.connect_client_info_able()
-		syscall.connect_client_info_ext()
-		syscall.client_info_ext_free()
+		syscalls.append("channel_create")
+		syscalls.append("channel_create_r")
+		syscalls.append("channel_create_ext")
+		syscalls.append("channel_destory")
+		syscalls.append("connect_attach")
+		syscalls.append("connect_attach_ext")
+		syscalls.append("connect_server_info")
+		syscalls.append("connect_client_info")
+		syscalls.append("connect_flags")
+		syscalls.append("channel_conn_attr")
+		syscalls.append("connect_client_info_able")
+		syscalls.append("connect_client_info_ext")
+		syscalls.append("client_info_ext_free")
 	
 	if do_msging:
-		#syscall.msg_send()
-		syscall.msg_send_pulse()
-		#syscall.msg_receive()
-		#syscall.msg_receive_pulse()
-		syscall.msg_key_data()
-		syscall.msg_send_async_gbl()
-		#syscall.msg_send_async()
-		#syscall.msg_receive_async_gbl()
-		syscall.msg_pause()
+		syscalls.append("msg_send")
+		syscalls.append("msg_send_pulse")
+		syscalls.append("msg_receive")
+		syscalls.append("msg_receive_pulse")
+		syscalls.append("msg_key_data")
+		syscalls.append("msg_send_async_gbl")
+		syscalls.append("msg_send_async")
+		syscalls.append("msg_receive_async_gbl")
+		syscalls.append("msg_pause")
 
 	if do_threads:
-		syscall.thread_ctl()
-		syscall.thread_ctl_ext()
+		syscalls.append("thread_ctl")
+		syscalls.append("thread_ctl_ext")
 
 	if do_signals:
-		#syscall.signal_kill()
-		syscall.signal_return() # Can return to anywhere
-		#syscall.signal_fault() # This causes the crash
-		#syscall.signal_action()
+		syscalls.append("signal_kill")
+		syscalls.append("signal_return")
+		syscalls.append("signal_fault")
+		syscalls.append("signal_action")
+		syscalls.append("signal_return")
    
     # All require root permissions
 	if do_interupts:
-		syscall.interupt_hook_trace()
-		syscall.interupt_hook_idle() 
-		syscall.interupt_hook_idle2()
-		syscall.interupt_hook_overdrive_event()
-		syscall.interupt_attach_event()
+		syscalls.append("interupt_hook_trace")
+		syscalls.append("interupt_hook_idle")
+		syscalls.append("interupt_hook_idle2")
+		syscalls.append("interupt_hook_overdrive_event")
+		syscalls.append("interupt_attach_event")
 
 	if do_scheduling:
-		syscall.scheduler_info()
-		syscall.scheduler_get()
-		syscall.scheduler_set()
-		syscall.scheduler_yield()
-		syscall.scheduler_ctl()
-		syscall.scheduler_job_create()
-		syscall.scheduler_job_destroy()
-		syscall.scheduler_waypoint()
-		syscall.scheduler_waypoint2()
+		syscalls.append("scheduler_info")
+		syscalls.append("scheduler_get")
+		syscalls.append("scheduler_set")
+		syscalls.append("scheduler_yield")
+		syscalls.append("scheduler_yield")
+		syscalls.append("scheduler_job_create")
+		syscalls.append("scheduler_job_destroy")
+		syscalls.append("scheduler_waypoint")
+		syscalls.append("scheduler_waypoint2")
 
 	if do_qnet:
-		syscall.net_cred()
-		syscall.net_vtid()
-		syscall.net_unblock()
-		syscall.net_info_scoid()
-		syscall.net_signal_skill()
-
+		syscalls.append("net_cred")
+		syscalls.append("net_vtid")
+		syscalls.append("net_unblock")
+		syscalls.append("net_info_scoid")
+		syscalls.append("net_signal_skill")
 
 	if do_timer:
-		syscall.timer_create()
-		#syscall.timer_settime() - causes coredump
-		syscall.timer_alarm()
-		syscall.timer_timeout()
-		syscall.timer_info()
-		syscall.timer_destroy()
+		syscalls.append("timer_create")
+		syscalls.append("timer_settime")
+		syscalls.append("timer_alarm")
+		syscalls.append("timer_timeout")
+		syscalls.append("timer_info")
+		syscalls.append("timer_destroy")
 
 	if do_sync:
-		syscall.sync_type_create()
-		syscall.sync_ctl()
-		syscall.sync_mutex_event()
-		syscall.sync_mutex_lock()
-		syscall.sync_mutex_unlock()
-		syscall.sync_mutex_revive()
-		#syscall.sync_condvar_wait()
-		syscall.sync_condvar_signal()
-		syscall.sync_sem_post()
-		#syscall.sync_sem_wait() - blocks
+		syscalls.append("sync_type_create")
+		syscalls.append("sync_ctl")
+		syscalls.append("sync_mutex_event")
+		#syscalls.append("sync_mutex_lock")
+		syscalls.append("sync_mutex_unlock")
+		syscalls.append("sync_mutex_revive")
+		#syscalls.append("sync_condvar_wait")
+		syscalls.append("sync_condvar_signal")
+		syscalls.append("sync_sem_post")
+		#syscalls.append("sync_sem_wait")
 
 	if do_clock:
-		syscall.clock_id()
-		syscall.clock_adjust()
-		syscall.clock_period()
+		syscalls.append("clock_id")
+		syscalls.append("clock_adjust")
+		syscalls.append("clock_period")
 
 	if do_tracelogging:
-		syscall.trace_event()
+		syscalls.append("trace_event")
 
 	if do_cpupage:
-		syscall.cpu_page_get()
-		syscall.cpu_page_set()
+		syscalls.append("cpu_page_get")
+		syscalls.append("cpu_page_set")
+
+	if do_power:
+		syscalls.append("power_param")
+		syscalls.append("power_active")
+
+	print(syscalls)
+
+	# Fuzz loop
+	while True:
+		call = util.choice(syscalls)
+		print(call) 
+		# Make the call
+		method = getattr(syscall,call)
+		method()
