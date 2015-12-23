@@ -13,6 +13,7 @@ while true; do python3.2 syscall_fuzz.py; done
 
 from ctypes import *
 from util import *
+import socket
 
 # flags for _channel_connect_attr 
 #define _NTO_CHANCON_ATTR_CONFLAGS		0x00000001
@@ -317,7 +318,7 @@ class nto_power_parameter(Structure):
 
 class Syscall:
 
-	def __init__(self):
+	def __init__(self,syscalls):
 		self.libc = CDLL("libc.so")
 		self.channel_ids = [0,1,1073741824]
 		self.pids = [0,1]
@@ -326,6 +327,16 @@ class Syscall:
 		self.timer_ids = [0]
 		self.connection_ids = [0]
 		self.sync = nto_job_t() # global sync type
+		self.syscalls = syscalls # so we can mutate in thread callback
+		self.clock_ids = [0]
+
+		self.remote_log = True
+		if self.remote_log:
+			self.server = "192.168.65.1"
+			self.port = 50007
+			self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			print('connecting to logging server...')
+			self.sock.connect((self.server, self.port))
 
 	# Not in neutrino.h
 	def cache_flush(self):
@@ -367,25 +378,28 @@ class Syscall:
 		if (self.util.chance(2)):
 			flags = self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS)
 
+			self.log_remote("ChannelCreate")
 		ret = self.libc.ChannelCreate(flags)
 		if (ret != -1):
 			print("ChannelCreate coid = ", ret)
 			self.channel_ids.append(ret)
 		else:
 			print("ChannelCreate failed")
+		
 
 	def channel_create_r(self):
 		flags = self.util.choice(CHAN_FLAGS)
 
 		if (self.util.chance(2)):
 			flags = self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS) | self.util.choice(CHAN_FLAGS)
-
+		self.log_remote("ChannelCreate_r")
 		ret = self.libc.ChannelCreate_r(flags)
 		if (ret != -1):
 			print("channel_create_r coid = ", ret)
 			self.channel_ids.append(ret)
 		else:
 			print("ChannelCreate_r failed")
+		
 
 	# http://www.qnx.com/developers/docs/660/index.jsp?topic=%2Fcom.qnx.doc.neutrino.lib_ref%2Ftopic%2Fc%2Fchannelcreateext.html
 	def channel_create_ext(self):
@@ -406,7 +420,7 @@ class Syscall:
 		ev.sival_ptr = self.util.R(0xffffffff)
 
 		cred = _cred_info()
-
+		self.log_remote("ChannelCreateExt")
 		print("Bufsize = ",bufsize)
 		print("Maxnumbuf = ",maxnumbuf)
 		ret = self.libc.ChannelCreateExt(flags,mode,bufsize,maxnumbuf,byref(ev),byref(cred))
@@ -415,23 +429,28 @@ class Syscall:
 			self.channel_ids.append(ret)
 		else:
 			print("ChannelCreateExt failed")
+		
 
     # http://www.qnx.com/developers/docs/6.3.2/neutrino/lib_ref/c/channeldestroy.html
 	def channel_destory(self):
 		chid = self.util.choice(self.channel_ids)
 		if (self.util.chance(4)):
 			chid = self.util.R(0xffffffff)
+		self.log_remote("ChannelDestroy")
 		ret = self.libc.ChannelDestroy(chid)
 		if (ret != 1):
 			print("ChannelDestroy worked")
+		
 
 	def channel_destroy_r(self):
 		chid = self.util.choice(self.channel_ids)
 		if (self.util.chance(4)):
 			chid = self.util.R(0xffffffff)
+		self.log_remote("ChannelDestroy_r")
 		ret = self.libc.ChannelDestroy_r(chid)
 		if (ret != 1):
 			print("ChannelDestroy_r worked")
+		
 
 	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectattach.html
 	def connect_attach(self):
@@ -447,12 +466,14 @@ class Syscall:
 		if (self.util.chance(4)):
 			flags = self.util.choice(CONN_FLAGS) | self.util.choice(CONN_FLAGS)
 
+		self.log_remote("ConnectAttach")
 		ret = self.libc.ConnectAttach(nd,pid,chid,index,flags)
 		if (ret != -1):
 			print("ConnectAttach = ", ret)
 			self.connection_ids.append(ret)
 		else:
 			print("ConnectAttach failed")
+		
 
 	def connect_attach_r(self):
 		nd = 0
@@ -467,12 +488,14 @@ class Syscall:
 		if (self.util.chance(4)):
 			flags = self.util.choice(CONN_FLAGS) | self.util.choice(CONN_FLAGS)
 
+		self.log_remote("ConnectAttach")
 		ret = self.libc.ConnectAttach_r(nd,pid,chid,index,flags)
 		if (ret != -1):
 			print("ConnectAttach = ", ret)
 			self.connection_ids.append(ret)
 		else:
 			print("ConnectAttach failed")
+			
 
 	# This is undocumented
 	# extern int ConnectAttachExt(_Uint32t __nd, pid_t __pid, int __chid, unsigned __index, int __flags, struct _asyncmsg_connection_descriptor *__cd);
@@ -504,30 +527,35 @@ class Syscall:
 		cd.block_con = self.util.R(0xffffffff)
 		cd.mu = self.util.R(0xffffffff)
 		cd.reserve = 0
-
+		self.log_remote("ConnectAttachExt")
 		ret = self.libc.ConnectAttachExt(nd,pid,chid,index,flags,byref(cd))
 		if (ret != -1):
 			print("ConnectAttachExt = ", ret)
 			self.connection_ids.append(ret)
 		else:
-			print("ConnectAttachExt failed")	
+			print("ConnectAttachExt failed")
+		self.log_remote("ConnectAttachExt")	
 
 	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectdetach.html
 	def connect_detach(self):
 		coid = self.util.choice(self.connection_ids)
+		self.log_remote("ConnectDetach")
 		ret = self.libc.ConnectDetach(coid)
 		if (ret != -1):
 			print("ConnectDetach ok = ", ret)
 		else:
 			print("ConnectDetach failed")	
+		self.log_remote("ConnectDetach")
 
 	def connect_detach_r(self):
 		coid = self.util.choice(self.connection_ids)
+		self.log_remote("ConnectDetach_r")
 		ret = self.libc.ConnectDetach_r(coid)
 		if (ret != -1):
 			print("ConnectDetach_r ok = ", ret)
 		else:
 			print("ConnectDetach_r failed")	
+		self.log_remote("ConnectDetach_r")
 
     # http://www.qnx.com/developers/docs/6.4.0/neutrino/lib_ref/c/connectserverinfo.html
 	def connect_server_info(self):
@@ -535,6 +563,7 @@ class Syscall:
 		pid = self.util.choice(self.pids)
 		coid = self.util.choice(self.connection_ids)
 		info = _msg_info()
+		self.log_remote("ConnectServerInfo")
 		ret = self.libc.ConnectServerInfo(pid,coid,byref(info))
 		if (ret != -1):
 			print("ConnectServerInfo ok = ", ret)
@@ -542,19 +571,22 @@ class Syscall:
 			self.scoids.append(info.scoid)
 		else:
 			print("ConnectServerInfo failed")	
+		self.log_remote("ConnectServerInfo")
 
 	def connect_server_info_r(self):
 		##extern int ConnectServerInfo(pid_t __pid, int __coid, struct _server_info *__info);
 		pid = self.util.choice(self.pids)
 		coid = self.util.choice(self.connection_ids)
 		info = _msg_info()
+		self.log_remote("ConnectServerInfo_r")
 		ret = self.libc.ConnectServerInfo_r(pid,coid,byref(info))
 		if (ret != -1):
 			print("ConnectServerInfo_r ok = ", ret)
 			print("scoid = ", info.scoid)
 			self.scoids.append(info.scoid)
 		else:
-			print("ConnectServerInfo_r failed")	
+			print("ConnectServerInfo_r failed")
+		self.log_remote("ConnectServerInfo_r")		
 
 	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectclientinfo.html
 	def connect_client_info(self):
@@ -562,11 +594,13 @@ class Syscall:
 		scoid = self.util.choice(self.connection_ids)
 		info = _client_info()
 		ngroups = self.util.R(0xffffffff)
+		self.log_remote("ConnectClientInfo")
 		ret = self.libc.ConnectClientInfo(scoid,byref(info),ngroups)
 		if (ret != -1):
 			print("ConnectClientInfo ok = ", ret)
 		else:
-			print("ConnectClientInfo failed")	
+			print("ConnectClientInfo failed")
+		self.log_remote("ConnectClientInfo")		
 
 	# http://www.qnx.com/developers/docs/6.3.0SP3/neutrino/lib_ref/c/connectclientinfo.html
 	def connect_client_info_r(self):
@@ -574,11 +608,13 @@ class Syscall:
 		scoid = self.util.choice(self.connection_ids)
 		info = _client_info()
 		ngroups = self.util.R(0xffffffff)
+		self.log_remote("ConnectClientInfo_r")
 		ret = self.libc.ConnectClientInfo_r(scoid,byref(info),ngroups)
 		if (ret != -1):
 			print("ConnectClientInfo_r ok = ", ret)
 		else:
-			print("ConnectClientInfo_r failed")	
+			print("ConnectClientInfo_r failed")
+		self.log_remote("ConnectClientInfo_r")		
 
 	def connect_flags(self):
 		#extern int ConnectFlags(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
@@ -587,11 +623,13 @@ class Syscall:
 		# TODO: Fix mask / bits here
 		mask = self.util.R(0xffffffff)
 		bits = self.util.R(0xffffffff)
+		self.log_remote("ConnectFlags")
 		ret = self.libc.ConnectFlags(pid,coid,mask,bits)
 		if (ret != -1):
 			print("ConnectFlags ok = ", ret)
 		else:
-			print("ConnectFlags failed")	
+			print("ConnectFlags failed")
+			
 
 
 	def connect_flags_r(self):
@@ -600,11 +638,13 @@ class Syscall:
 		coid = self.util.choice(self.connection_ids)
 		mask = self.util.R(0xffffffff)
 		bits = self.util.R(0xffffffff)
+		self.log_remote("ConnectFlags_r")
 		ret = self.libc.ConnectFlags_r(pid,coid,mask,bits)
 		if (ret != -1):
 			print("ConnectFlags_r ok = ", ret)
 		else:
 			print("ConnectFlags_r failed")	
+		
 
 	# This is interesting, conn_attr is complicated struct.
 	# Undocumented function
@@ -635,11 +675,13 @@ class Syscall:
 		__new_attr.cred = cred
 
 		flags = self.util.choice(CHAN_CONNECT_FLAGS)
+		self.log_remote("ChannelConnectAttr")
 		ret = self.libc.ChannelConnectAttr(__id,__old_attr,__new_attr,flags)
 		if (ret != -1):
 			print("ChannelConnectAttr ok = ", ret)
 		else:
 			print("ChannelConnectAttr failed")	
+			
 
 	# extern int ConnectClientInfoAble(int __scoid, struct _client_info **__info_pp, int flags, struct _client_able * const abilities, const int nable);
 	def connect_client_info_able(self):
@@ -648,11 +690,13 @@ class Syscall:
 		flags = 0
 		abilities = _client_able()
 		nable = self.util.R(0xffffffff)
+		self.log_remote("ConnectClientInfoAble")
 		ret = self.libc.ConnectClientInfoAble(__scoid,byref(__info_pp),flags,byref(abilities),nable)
 		if (ret != -1):
 			print("ConnectClientInfoAble ok = ", ret)
 		else:
-			print("ConnectClientInfoAble failed")			
+			print("ConnectClientInfoAble failed")	
+					
 
 
 	# extern int ConnectClientInfoExt(int __scoid, struct _client_info **__info_pp, int flags);
@@ -660,21 +704,25 @@ class Syscall:
 		scoid = self.util.choice(self.connection_ids)
 		ci = _client_info()
 		flags = 1
+		self.log_remote("ConnectClientInfoExt")
 		ret = self.libc.ConnectClientInfoExt(scoid,byref(ci),flags)
 		if (ret != -1):
 			print("ConnectClientInfoExt ok = ", ret)
 		else:
 			print("ConnectClientInfoExt failed")
+			
 
 	#extern int ClientInfoExtFree(struct _client_info **__info_pp);
 	def client_info_ext_free(self):
 		value = c_ulong
 		ptr = POINTER(value)()
+		self.log_remote("ClientInfoExtFree")
 		ret = self.libc.ClientInfoExtFree(byref(ptr))
 		if (ret != -1):
 			print("ClientInfoExtFree ok = ", ret)
 		else:
-			print("ClientInfoExtFree failed")		
+			print("ClientInfoExtFree failed")	
+				
 
 
 	################################ Messaging Methods ###############################
@@ -1317,20 +1365,35 @@ class Syscall:
 
 	############################ Thread Methods ##################################
 
+	# Add mutation within callback function
+	def callback(a, b):
+		print("ThreadCreate callback called!")
+		return 0
+
 	# extern int ThreadCreate(pid_t __pid, void *(*__func)(void *__arg), void *__arg, const struct _thread_attr *__attr);
-	def threat_create(self):
+	def thread_create(self):
 		pid = self.util.choice(self.pids)
-		func = create_string_buffer(256)
+		CMPFUNC = CFUNCTYPE(c_void_p, POINTER(c_int))
+		cmp_func = CMPFUNC(self.callback)
+		self.log_remote("ThreadCreate")
+		ret = self.libc.ThreadCreate(pid,cmp_func,0,0)
+		if (ret != -1):
+			print("ThreadCreate ok", ret)
+		else:
+			print("ThreadCreate failed")	
+				
 
 	# extern int ThreadCtl(int __cmd, void *__data);
 	def thread_ctl(self):
 		cmd = self.util.R(15)
 		data = create_string_buffer(self.util.R(256))
+		self.log_remote("ThreadCtl")	
 		ret = self.libc.ThreadCtl(cmd,data)
 		if (ret != -1):
 			print("ThreadCtl ok", ret)
 		else:
-			print("ThreadCtl failed")			
+			print("ThreadCtl failed")	
+			
 
 	# extern int ThreadCtlExt(pid_t __pid, int __tid, int __cmd, void *__data);
 	# undocumented
@@ -1339,11 +1402,13 @@ class Syscall:
 		tid = 0
 		cmd = self.util.R(15)
 		data = create_string_buffer(self.util.R(256))
+		self.log_remote("ThreadCtlExt")
 		ret = self.libc.ThreadCtlExt(cmd,data)
 		if (ret != -1):
 			print("ThreadCtlExt ok", ret)
 		else:
 			print("ThreadCtlExt failed")
+		
 
 	############################ Interupt Methods ##################################
 
@@ -1351,52 +1416,61 @@ class Syscall:
 	def interupt_hook_trace(self):
 		handler = c_ulong()
 		flags = 0
+		self.log_remote("InterruptHookTrace")
 		ret = self.libc.InterruptHookTrace(byref(handler),flags)
 		if (ret != -1):
 			print("InterruptHookTrace ok", ret)
 		else:
 			print("InterruptHookTrace failed")	
-
+		
 	# extern int InterruptHookIdle(void (*__handler)(_Uint64t *, struct qtime_entry *), unsigned __flags);
 	def interupt_hook_idle(self):
 		handler = c_ulong()
 		flags = 0
+		self.log_remote("InterruptHookIdle")
 		ret = self.libc.InterruptHookIdle(byref(handler),flags)
 		if (ret != -1):
 			print("InterruptHookIdle ok", ret)
 		else:
 			print("InterruptHookIdle failed")	
+		
 
 	# extern int InterruptHookIdle2(void (*__handler)(unsigned, struct syspage_entry *, struct _idle_hook *), unsigned __flags);
 	def interupt_hook_idle2(self):
 		handler = c_ulong()
 		flags = 0
+		self.log_remote("InterruptHookIdle2")
 		ret = self.libc.InterruptHookIdle2(byref(handler),flags)
 		if (ret != -1):
 			print("InterruptHookIdle2 ok", ret)
 		else:
 			print("InterruptHookIdle2 failed")
+		
 
 	# extern int InterruptHookOverdriveEvent(const struct sigevent *__event, unsigned __flags);
 	def interupt_hook_overdrive_event(self):
 		__event = sigevent()
 		flags = 0
+		self.log_remote("InterruptHookOverdriveEvent")
 		ret = self.libc.InterruptHookOverdriveEvent(byref(__event),flags)
 		if (ret != -1):
 			print("InterruptHookOverdriveEvent ok", ret)
 		else:
 			print("InterruptHookOverdriveEvent failed")	
+		
 
 	# extern int InterruptAttachEvent(int __intr, const struct sigevent *__event, unsigned __flags);
 	def interupt_attach_event(self):
 		intr = self.util.R(0xffffffff)
 		__event = sigevent()
 		flags = 0
+		self.log_remote("InterruptAttachEvent")
 		ret = self.libc.InterruptAttachEvent(intr,byref(__event),flags)
 		if (ret != -1):
 			print("InterruptAttachEvent ok", ret)
 		else:
 			print("InterruptAttachEvent failed")	
+		
 
     # extern int InterruptAttach(int __intr, const struct sigevent *(*__handler)(void *__area, int __id), const void *__area, int __size, unsigned __flags);
 	def interupt_attach_event(self):
@@ -1405,30 +1479,36 @@ class Syscall:
 		area = create_string_buffer(256)
 		size = len(area)
 		flags = 0
+		self.log_remote("InterruptAttach")
 		ret = self.libc.InterruptAttach(intr,byref(__event),area,size,flags)
 		if (ret != -1):
 			print("InterruptAttach ok", ret)
 		else:
 			print("InterruptAttach failed")
+		
 
 	# extern int InterruptDetach(int __id);
 	def interupt_detach(self):
 		_id = self.util.R(0xffffffff)
+		self.log_remote("InterruptDetach")
 		ret = self.libc.InterruptAttach(_id)
 		if (ret != -1):
 			print("InterruptDetach ok", ret)
 		else:
 			print("InterruptDetach failed")		
+		
 
 	# extern int InterruptWait(int __flags, const _Uint64t *__timeout);
 	def interupt_wait(self):
 		__flags = 0
 		timeout = c_ulong()
+		self.log_remote("InterruptWait")
 		ret = self.libc.InterruptWait(__flags,byref(timeout))
 		if (ret != -1):
 			print("InterruptWait ok", ret)
 		else:
-			print("InterruptWait failed")			
+			print("InterruptWait failed")
+						
 
 	# extern int InterruptCharacteristic(int __type, int __id, unsigned *__new, unsigned *__old);
 	def interupt_characteristic(self):
@@ -1436,11 +1516,13 @@ class Syscall:
 		_id = self.util.R(0xffffffff)
 		_new = c_ulong()
 		_old = c_ulong()
+		self.log_remote("InterruptCharacteristic")
 		ret = self.libc.InterruptCharacteristic(__type,_id,byref(_new),byref(_old))
 		if (ret != -1):
 			print("InterruptCharacteristic ok", ret)
 		else:
-			print("InterruptCharacteristic failed")		
+			print("InterruptCharacteristic failed")	
+			
 
 	############################ Scheduler Methods #################################
 	# extern int SchedGet(pid_t __pid, int __tid, struct sched_param *__param);
@@ -1448,41 +1530,49 @@ class Syscall:
 		pid = self.util.choice(self.pids)
 		tid = 0
 		_param = sched_param()
+		self.log_remote("SchedGet")
 		ret = self.libc.SchedGet(pid,tid,_param)
 		if (ret != -1):
 			print("SchedGet ok", ret)
 		else:
-			print("SchedGet failed")	   	
+			print("SchedGet failed")
+		 	   	
 
 	def scheduler_set(self):
 		pid = self.util.choice(self.pids)
 		tid = 0
 		__algorithm = 0
 		_param = sched_param()
+		self.log_remote("SchedSet") 
 		ret = self.libc.SchedSet(pid,tid,__algorithm,_param)
 		if (ret != -1):
 			print("SchedSet ok", ret)
 		else:
 			print("SchedSet failed")
+		
 
 	# extern int SchedInfo(pid_t __pid, int __algorithm, struct _sched_info *__info);
 	def scheduler_info(self):
 		pid = self.util.choice(self.pids)
 		__algorithm = 0
 		_info = sched_info()
+		self.log_remote("SchedInfo") 
 		ret = self.libc.SchedInfo(pid,__algorithm,byref(_info))
 		if (ret != -1):
 			print("SchedInfo ok", ret)
 		else:
-			print("SchedInfo failed")    	
+			print("SchedInfo failed") 
+		  	
 
 	# extern int SchedYield(void);
 	def scheduler_yield(self):
+		self.log_remote("SchedYield")
 		ret = self.libc.SchedYield()
 		if (ret != -1):
 			print("SchedYield ok", ret)
 		else:
-			print("SchedYield failed")  		
+			print("SchedYield failed")  
+					
 
 	# extern int SchedCtl(int __cmd, void *__data, size_t __length);
 	def scheduler_ctl(self):
@@ -1491,42 +1581,49 @@ class Syscall:
 			cmd = self.util.R(3)
 		data = create_string_buffer(self.util.R(256))
 		l = len(data)
+		self.log_remote("SchedCtl")
 		ret = self.libc.SchedCtl(cmd,data,l)
 		if (ret != -1):
 			print("SchedCtl ok", ret)
 		else:
-			print("SchedCtl failed")  		
+			print("SchedCtl failed")  
+				
 
 	# extern int SchedJobCreate(nto_job_t	*__job);
 	# undocumented
 	def scheduler_job_create(self):
 		job = nto_job_t()
+		self.log_remote("SchedJobCreate")
 		ret = self.libc.SchedJobCreate(byref(job))
 		if (ret != -1):
 			print("SchedJobCreate ok", ret)
 		else:
-			print("SchedJobCreate failed")  		
+			print("SchedJobCreate failed")  	
+				
 
 	# extern int SchedJobDestroy(nto_job_t	*__job);
 	def scheduler_job_destroy(self):
 		job = nto_job_t()
+		self.log_remote("SchedJobDestroy")
 		ret = self.libc.SchedJobDestroy(byref(job))
 		if (ret != -1):
 			print("SchedJobDestroy ok", ret)
 		else:
-			print("SchedJobDestroy failed")  	
-
+			print("SchedJobDestroy failed")  
+				
 	# extern int SchedWaypoint(nto_job_t *__job, const _Int64t *__new, _Int64t *__old);
 	# undocumented
 	def scheduler_waypoint(self):
 		job = nto_job_t()
 		new = c_ulong(self.util.R(0xffffffff))
 		old = c_ulong(self.util.R(0xffffffff))
+		self.log_remote("SchedWaypoint")
 		ret = self.libc.SchedWaypoint(byref(job),byref(new),byref(old))
 		if (ret != -1):
 			print("SchedWaypoint ok", ret)
 		else:
-			print("SchedWaypoint failed") 	
+			print("SchedWaypoint failed") 
+			
 
     # extern int SchedWaypoint2(nto_job_t *__job, const _Int64t *__new, const _Int64t *__max, _Int64t *__old);
     # undocumented
@@ -1535,11 +1632,13 @@ class Syscall:
 		new = c_ulong(self.util.R(0xffffffff))
 		m = c_ulong(self.util.R(0xffffffff))
 		old = c_ulong(self.util.R(0xffffffff))
+		self.log_remote("SchedWaypoint2") 
 		ret = self.libc.SchedWaypoint2(byref(job),byref(new),byref(m),byref(old))
 		if (ret != -1):
 			print("SchedWaypoint2 ok", ret)
 		else:
 			print("SchedWaypoint2 failed") 	
+		
 
 	############################ Timer Methods ##################################
 
@@ -1620,33 +1719,54 @@ class Syscall:
 	def sync_type_create(self):
 		t = self.util.R(4)
 		sync = nto_job_t()
+		sync.count = self.util.R(0xffffffff)
+		sync.__owner = 0
 
 		if self.util.chance(2):
 			sync = self.sync
 
 		attr = _sync_attr()
+		if self.util.chance(2):
+			attr.protocol = self.util.R(0xffffffff)
+			attr.flags = self.util.R(0xffffffff)
+			attr.protocol = self.util.R(0xffffffff)
+			attr.__prioceiling = self.util.R(0xffffffff)
+			attr.__clockid = self.util.choice(self.clock_ids)
+
+		self.log_remote("SyncTypeCreate")
 		ret = self.libc.SyncTypeCreate(t,byref(sync),byref(attr))
 		if (ret != -1):
 			print("SyncTypeCreate ok", ret)
 		else:
-			print("SyncTypeCreate failed") 			
+			print("SyncTypeCreate failed") 	
+		 		
 
 	# extern int SyncDestroy(sync_t *__sync);
+	def sync_destroy(self):
+		self.log_remote("SyncDestroy")
+		ret = self.libc.SyncDestroy(byref(self.sync))
+		if (ret != -1):
+			print("SyncDestroy ok", ret)
+		else:
+			print("SyncDestroy failed") 
+		 			
 
 	# extern int SyncCtl(int __cmd, sync_t *__sync, void *__data);
 	def sync_ctl(self):
-		cmd = self.util.R(5)
+		cmd = self.util.R(0xffffffff)
 		sync = nto_job_t()
 
 		if self.util.chance(2):
 			sync = self.sync
 
 		data = create_string_buffer(256)
+		self.log_remote("SyncCtl") 
 		ret = self.libc.SyncCtl(cmd,byref(sync),data)
 		if (ret != -1):
 			print("SyncCtl ok", ret)
 		else:
-			print("SyncCtl failed") 		
+			print("SyncCtl failed") 	
+			
 
 	# extern int SyncMutexEvent(sync_t *__sync, struct sigevent *event);
 	def sync_mutex_event(self):
@@ -1656,11 +1776,13 @@ class Syscall:
 			sync = self.sync
 
 		event = sigevent()
+		self.log_remote("SyncMutexEvent")
 		ret = self.libc.SyncMutexEvent(byref(sync),byref(event))
 		if (ret != -1):
 			print("SyncMutexEvent ok", ret)
 		else:
-			print("SyncMutexEvent failed") 		
+			print("SyncMutexEvent failed") 	
+		 	
 
 	# extern int SyncMutexLock(sync_t *__sync);
 	def sync_mutex_lock(self):
@@ -1669,11 +1791,13 @@ class Syscall:
 		if self.util.chance(2):
 			sync = self.sync
 
+		self.log_remote("SyncMutexLock") 
 		ret = self.libc.SyncMutexLock(byref(sync))
 		if (ret != -1):
 			print("SyncMutexLock ok", ret)
 		else:
-			print("SyncMutexLock failed") 		
+			print("SyncMutexLock failed")
+				
 
 	# extern int SyncMutexUnlock(sync_t *__sync);			
 	def sync_mutex_unlock(self):
@@ -1682,11 +1806,13 @@ class Syscall:
 		if self.util.chance(2):
 			sync = self.sync
 
+		self.log_remote("SyncMutexUnlock")
 		ret = self.libc.SyncMutexUnlock(byref(sync))
 		if (ret != -1):
 			print("SyncMutexUnlock ok", ret)
 		else:
 			print("SyncMutexUnlock failed")
+		
 
 	# extern int SyncMutexRevive(sync_t *__sync);
 	def sync_mutex_revive(self):
@@ -1695,11 +1821,13 @@ class Syscall:
 		if self.util.chance(2):
 			sync = self.sync
 
+		self.log_remote("SyncMutexRevive")
 		ret = self.libc.SyncMutexRevive(byref(sync))
 		if (ret != -1):
 			print("SyncMutexRevive ok", ret)
 		else:
-			print("SyncMutexRevive failed")		
+			print("SyncMutexRevive failed")	
+				
 
 	# extern int SyncCondvarWait(sync_t *__sync, sync_t *__mutex);
 
@@ -1710,11 +1838,13 @@ class Syscall:
 			sync = self.sync
 
 		__mutex = nto_job_t()
+		self.log_remote("SyncCondvarWait")
 		ret = self.libc.SyncCondvarWait(byref(sync),byref(__mutex))
 		if (ret != -1):
 			print("SyncCondvarWait ok", ret)
 		else:
-			print("SyncCondvarWait failed")		
+			print("SyncCondvarWait failed")	
+				
 
 	# extern int SyncCondvarSignal(sync_t *__sync, int __all);
 	def sync_condvar_signal(self):
@@ -1723,12 +1853,14 @@ class Syscall:
 		if self.util.chance(2):
 			sync = self.sync
 
+		self.log_remote("SyncCondvarSignal")
 		__all = 0
 		ret = self.libc.SyncCondvarSignal(byref(sync),__all)
 		if (ret != -1):
 			print("SyncCondvarSignal ok", ret)
 		else:
-			print("SyncCondvarSignal failed")		
+			print("SyncCondvarSignal failed")	
+			
 
 	# extern int SyncSemPost(sync_t *__sync);
 	def sync_sem_post(self):
@@ -1737,11 +1869,13 @@ class Syscall:
 		if self.util.chance(2):
 			sync = self.sync
 
+		self.log_remote("SyncSemPost")
 		ret = self.libc.SyncSemPost(byref(sync))
 		if (ret != -1):
 			print("SyncSemPost ok", ret)
 		else:
-			print("SyncSemPost failed")		
+			print("SyncSemPost failed")
+				
 
 	# extern int SyncSemWait(sync_t *__sync, int __tryto);
 	def sync_sem_wait(self):
@@ -1751,11 +1885,13 @@ class Syscall:
 			sync = self.sync
 
 		__tryto = 0
+		self.log_remote("SyncSemWait")
 		ret = self.libc.SyncSemWait(byref(sync),__tryto)
 		if (ret != -1):
 			print("SyncSemWait ok", ret)
 		else:
-			print("SyncSemWait failed")		
+			print("SyncSemWait failed")	
+			
 
 
 	############################ Clock Methods ##################################
@@ -1765,87 +1901,104 @@ class Syscall:
 		i = 0
 		_new = c_uint64()
 		_old = c_uint64()
+		self.log_remote("ClockTime")
 		ret = self.libc.ClockTime(i,byref(_new),byref(_old))
 		if (ret != -1):
 			print("ClockTime ok", ret)
 		else:
-			print("ClockTime failed")		
+			print("ClockTime failed")	
+				
 
 	def clock_adjust(self):
 		# ClockAdjust(clockid_t __id, const struct _clockadjust *_new, struct _clockadjust *__old);
 		__id = 0
 		_new = clockadjust()
 		_old = clockadjust()
+		self.log_remote("ClockAdjust")
 		ret = self.libc.ClockAdjust(__id,byref(_new),byref(_old))
 		if (ret != -1):
 			print("ClockAdjust ok", ret)
 		else:
-			print("ClockAdjust failed")		
+			print("ClockAdjust failed")	
+				
 
 	# extern int ClockPeriod(clockid_t __id, const struct _clockperiod *_new, struct _clockperiod *__old, int __reserved);
 	def clock_period(self):
 		__id = 0
 		_new = clockadjust()
 		_old = clockadjust()
+		self.log_remote("ClockPeriod")
 		ret = self.libc.ClockPeriod(__id,byref(_new),byref(_old))
 		if (ret != -1):
 			print("ClockPeriod ok", ret)
 		else:
-			print("ClockPeriod failed")					
+			print("ClockPeriod failed")
+								
 
 	# extern int ClockId(pid_t __pid, int __tid);
 	def clock_id(self):
+		self.log_remote("ClockId")
 		pid = self.util.choice(self.pids)
 		tid = 0
 		ret = self.libc.ClockId(pid,tid)
 		if (ret != -1):
 			print("ClockId ok", ret)
 		else:
-			print("ClockId failed")			
+			print("ClockId failed")
+						
 
 	# QNET kernel stuff #########################################################
 
 	#extern int NetCred(int __coid, const struct _client_info *__info);
 	def net_cred(self):
+		self.log_remote("NetCred")	
 		coid = self.util.choice(self.channel_ids)
 		ci = _client_info()
 		ret = self.libc.NetCred(coid,byref(ci))
 		if (ret != -1):
 			print("NetCred ok", ret)
 		else:
-			print("NetCred failed") 	
+			print("NetCred failed") 
+			
 
 	#extern int NetVtid(int __vtid, const struct _vtid_info *__info);
 	def net_vtid(self):
+		self.log_remote("NetVtid")
 		__vtid = self.util.choice(self.channel_ids)
 		__info = _vtid_info()
 		ret = self.libc.NetVtid(__vtid,byref(__info))
 		if (ret != -1):
 			print("NetVtid ok", ret)
 		else:
-			print("NetVtid failed") 			
+			print("NetVtid failed") 
+					
 
 	# extern int NetUnblock(int __vtid);
 	def net_unblock(self):
+		self.log_remote("NetUnblock")
 		vtid = 0
 		ret = self.libc.NetUnblock(vtid)
 		if (ret != -1):
 			print("NetUnblock ok", ret)
 		else:
 			print("NetUnblock failed") 	
+			
 
 	# extern int NetInfoscoid(int __local_scoid, int __remote_scoid);
 	def net_info_scoid(self):
+		self.log_remote("NetInfoscoid")
 		scoid = self.util.choice(self.channel_ids)
 		__remote_scoid = self.util.choice(self.channel_ids)
 		ret = self.libc.NetInfoscoid(scoid,__remote_scoid)
 		if (ret != -1):
 			print("NetInfoscoid ok", ret)
 		else:
-			print("NetInfoscoid failed") 	
+			print("NetInfoscoid failed")
+				
 
 	# extern int NetSignalKill(void *sigdata, struct _cred_info *cred);
 	def net_signal_skill(self):
+		self.log_remote("NetSignalKill")	
 		sigdata = create_string_buffer(256)
 		cred = _cred_info()
 		ret = self.libc.NetSignalKill(sigdata,byref(cred))
@@ -1853,9 +2006,9 @@ class Syscall:
 			print("NetSignalKill ok", ret)
 		else:
 			print("NetSignalKill failed") 			
-
-
+		
 	def trace_event(self):
+		self.log_remote("TraceEvent")
 		code = self.util.R(0xffffffff)
 		c1 = self.util.R(0xffffffff)
 		c2 = self.util.R(0xffffffff)
@@ -1867,21 +2020,26 @@ class Syscall:
 		if (ret != -1):
 			print("TraceEvent ok", ret)
 		else:
-			print("TraceEvent failed") 		
+			print("TraceEvent failed") 	
+				
 
 	def cpu_page_get(self):
+		self.log_remote("__SysCpupageGet")
 		ret = self.libc.__SysCpupageGet(self.util.R(0xffffffff))
 		if (ret != -1):
 			print("__SysCpupageGet ok", ret)
 		else:
-			print("__SysCpupageGet failed") 		
+			print("__SysCpupageGet failed") 	
+			
 
 	def cpu_page_set(self):
+		self.log_remote("__SysCpupageSet")
 		ret = self.libc.__SysCpupageSet(self.util.R(0xffffffff),self.util.R(0xffffffff))
 		if (ret != -1):
 			print("__SysCpupageSet ok", ret)
 		else:
 			print("__SysCpupageSet failed")
+		
 
  	#extern int PowerParameter(unsigned __id, unsigned __struct_len, const struct nto_power_parameter *__new,
 	#struct nto_power_parameter *__old);	
@@ -1896,6 +2054,8 @@ class Syscall:
 		else:
 			l = 0x24
 
+		log_str = "PowerParameter"
+		self.log_remote(log_str)
 		ret = self.libc.PowerParameter(i,l,byref(__new),byref(__old))
 		if (ret != -1):
 			print("PowerParameter ok", ret)
@@ -1904,6 +2064,8 @@ class Syscall:
 
 	def power_active(self):
 		i = self.util.R(0xffffffff)
+		self.log_remote("PowerSetActive(" + str(i) + ");")
+
 		ret = self.libc.PowerSetActive(i)
 		if (ret != -1):
 			print("PowerSetActive ok", ret)
@@ -1911,8 +2073,15 @@ class Syscall:
 			print("PowerSetActive failed")
 		
 
+	def log_remote(self,data):
+		buf = create_string_buffer(bytes(data, encoding='utf-8'),50)
+		self.sock.sendall(buf)
+		ack = self.sock.recv(3)
+		print(ack)
+		
+
 if __name__ == "__main__":
-	syscall = Syscall()
+	
 	util = Util()
 
 	do_channels = True
@@ -1920,18 +2089,21 @@ if __name__ == "__main__":
 
 	do_threads = True
 	do_signals = False 
-	do_interupts = False
-	do_scheduling = False
-	do_qnet = False
+
+	do_interupts = True
+
+	do_scheduling = True # causes malloc fails
+
+	do_qnet = True
 
 	do_timer = False
-	do_clock = False
+	do_clock = True
 	do_sync = True
 
 	do_cpupage = False
-	do_tracelogging = False
+	do_tracelogging = True
 
-	do_power = False
+	do_power = True
 
 	syscalls = []
 
@@ -1962,6 +2134,7 @@ if __name__ == "__main__":
 		syscalls.append("msg_pause")
 
 	if do_threads:
+		syscalls.append("thread_create")
 		syscalls.append("thread_ctl")
 		syscalls.append("thread_ctl_ext")
 
@@ -1981,7 +2154,7 @@ if __name__ == "__main__":
 		syscalls.append("interupt_attach_event")
 
 	if do_scheduling:
-		syscalls.append("scheduler_info")
+		#syscalls.append("scheduler_info")
 		syscalls.append("scheduler_get")
 		syscalls.append("scheduler_set")
 		syscalls.append("scheduler_yield")
@@ -2008,6 +2181,7 @@ if __name__ == "__main__":
 
 	if do_sync:
 		syscalls.append("sync_type_create")
+		syscalls.append("sync_destroy")
 		syscalls.append("sync_ctl")
 		syscalls.append("sync_mutex_event")
 		#syscalls.append("sync_mutex_lock")
@@ -2035,6 +2209,8 @@ if __name__ == "__main__":
 		syscalls.append("power_active")
 
 	print(syscalls)
+
+	syscall = Syscall(syscalls)
 
 	# Fuzz loop
 	while True:
