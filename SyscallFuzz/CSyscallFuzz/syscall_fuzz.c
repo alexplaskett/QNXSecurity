@@ -1,26 +1,45 @@
 
+// ARM
 // $env:QNX_HOST="C:\bbndk\host_10_3_1_29\win32\x86"
 // $env:QNX_TARGET="C:\bbndk\target_10_3_1_2243\qnx6"
 // C:\bbndk\host_10_3_1_29\win32\x86\usr\bin\ntoarmv7-gcc.exe .\syscall_fuzz.c -o syscall_fuzz -marm
+// X86: 
+// C:\bbndk\host_10_3_1_29\win32\x86\usr\bin\ntox86-gcc.exe .\syscall_fuzz.c -o syscall_fuzz -w
 // Native code for fuzzing syscalls
 
 // TODO: Add support for QNX 6.5/8.0
+// Add Msg support
 
 #include <sys/neutrino.h>
 #include <sys/asyncmsg.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+
+#include <unistd.h>
 
 // Global vars
 
 int chids[256]; // max of 256 channels 
 int chid_count = 0;
 
-sync_t sync;
-nto_job_t job;
+sync_t sync2;
+
 clockid_t id;
 struct sigevent notify;
 timer_t timerid;
+struct _itimer itime;
+struct _itimer otime;
+
+int coid = 0;
+int rcvid = 0;
+
+#define QNX80
+#define ARM
+
+#ifdef QNX80
+nto_job_t job;
+#endif
 
 // Taken from trinity
 #define RAND_BYTE()             (rand() & 0xff)
@@ -98,6 +117,18 @@ unsigned long get_interesting_value(void)
 void init()
 {
 	memset(chids,0,256);
+
+	// Create a bunch of channels.
+	int i = chid_count;
+	while (chid_count < 10)
+	{
+		test_channel_create_ext();
+	}
+	printf("Init channels created\n");
+	for (i = 0; i < 10; i++)
+	{
+		printf("chid = %d\n",chids[i]);
+	}
 }
 
 int get_chid()
@@ -119,6 +150,7 @@ int get_chid()
 	return value;
 }
 
+
 void add_chid(int chid)
 {
 	int idx = chid_count % 256;
@@ -127,11 +159,26 @@ void add_chid(int chid)
 	printf("++ Adding chid %d\n",chid);
 }
 
+
+unsigned char chance(int r)
+{
+	if (rand() % r == 0)
+		return 1;
+	else
+		return 0;
+}
+
 // __KER_TRACE_EVENT
 void test_traceevent()
 {
 	int ret = 0;
-	ret = TraceEvent(1);
+	int a0 = ((0x00000001<<28)| (rand() % 44));
+	int a1 = rand() % 20;
+	int a2 = get_interesting_32bit_value();
+	int a3 = get_interesting_32bit_value();
+	int a4 = get_interesting_32bit_value();
+	printf("TraceEvent(%d,%d,%d,%d,%d);\n",a0,a1,a2,a3,a4);
+	ret = TraceEvent(a0,a1,a2,a3,a4);
 	printf("TraceEvent ret = %d\n",ret);
 }
 
@@ -152,7 +199,8 @@ void test_ring0()
 void test_cache_flush()
 {
 	int ret = 0;
-	//ret = CacheFlush();
+	printf("CacheFlush();\n");
+	ret = CacheFlush();
 	printf("CacheFlush ret = %d\n",ret);
 }
 
@@ -167,14 +215,11 @@ void test_sys_cpupage_get()
 // __KER_SYS_CPUPAGE_SET
 void test_sys_cpupage_set()
 {
-	__SysCpupageSet(0,1);
-	struct _process_local_storage		*pls;
-	pls = __SysCpupageGet(1);
-	printf("pls = %p\n",pls);
-	__SysCpupageSet(1,rand());
-	pls = __SysCpupageGet(1);
-	printf("pls = %p\n",pls);
-
+	int idx = rand() % 8;
+	int ret = 0;
+	int value = get_interesting_32bit_value();
+	printf("__SysCpupageSet(%d,%d);\n",idx,value);
+	ret = __SysCpupageSet(idx,value);
 }
 
 //// __KER_MSG Calls ////
@@ -197,6 +242,7 @@ void test_channel_create()
 	ret = ChannelCreate(flags);
 	printf("ChannelCreate ret = %d\n",ret);
 
+	// Store the id's of created channels
 	if (ret != -1)
 		add_chid(ret);
 
@@ -219,8 +265,19 @@ void test_channel_create_ext()
 	__maxnumbuf = get_interesting_32bit_value();
 
 	int ret = 0;
-	printf("ChannelCreateExt(%d,%d,%d,%d,%x,%x);\n",flags,mode,bufsize,__maxnumbuf,&ev,&cred);
-	ret = ChannelCreateExt(flags,mode,bufsize,__maxnumbuf,&ev,&cred);
+
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("ChannelCreateExt(%d,%d,%d,%d,%x,%x);\n",flags,mode,bufsize,__maxnumbuf,&ev,&cred);
+		ret = ChannelCreateExt(flags,mode,bufsize,__maxnumbuf,bad,bad);
+	} 
+	else
+	{
+		printf("ChannelCreateExt(%d,%d,%d,%d,%x,%x);\n",flags,mode,bufsize,__maxnumbuf,&ev,&cred);
+		ret = ChannelCreateExt(flags,mode,bufsize,__maxnumbuf,&ev,&cred);
+	}
+	
 	printf("ChannelCreateExt ret = %d\n",ret);
 	if (ret != -1)
 		add_chid(ret);
@@ -235,6 +292,7 @@ void test_channel_destroy()
 	printf("ChannelDestroy ret = %d\n",ret);
 }
 
+// Should store the return value as coid.
 // extern int ConnectAttach(_Uint32t __nd, pid_t __pid, int __chid, unsigned __index, int __flags);
 void test_connect_attach()
 {
@@ -249,6 +307,8 @@ void test_connect_attach()
 
 	ret = ConnectAttach(nd,pid,chid,index,flags);
 	printf("ConnectAttach ret = %d\n",ret);
+	if (ret != -1)
+		coid = ret; 
 }
 
 // extern int ConnectAttachExt(_Uint32t __nd, pid_t __pid, int __chid, unsigned __index, int __flags, struct _asyncmsg_connection_descriptor *__cd);
@@ -264,9 +324,21 @@ void test_connect_attach_ext()
 	struct _asyncmsg_connection_descriptor cd;
 	memset(&cd,0,sizeof(struct _asyncmsg_connection_descriptor));
 
-	printf("ConnectAttachExt(%d,%d,%d,%d,%d,%x);\n",nd,pid,chid,index,flags,&cd);
-	ret = ConnectAttachExt(nd,pid,chid,index,flags,&cd);
-	printf("ConnectAttachExt ret = %d\n",ret);		
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("ConnectAttachExt(%d,%d,%d,%d,%d,%x);\n",nd,pid,chid,index,flags,bad);
+		ret = ConnectAttachExt(nd,pid,chid,index,flags,&cd);
+		printf("ConnectAttachExt ret = %d\n",ret);		
+	}
+	else
+	{
+		printf("ConnectAttachExt(%d,%d,%d,%d,%d,%x);\n",nd,pid,chid,index,flags,&cd);
+		ret = ConnectAttachExt(nd,pid,chid,index,flags,&cd);
+		printf("ConnectAttachExt ret = %d\n",ret);		
+	}
+	if (ret != -1)
+		coid = ret; 
 }
 
 void test_connect_detach()
@@ -282,33 +354,51 @@ void test_connect_detach()
 void test_connect_server_info()
 {
 	int ret = 0;
-	int coid = 0;
 	int pid = 0;	
 	struct _server_info info;
 
-	printf("ConnectServerInfo(%d,%d,%x);\n",pid,coid,&info);
-	ret = ConnectServerInfo(pid,coid,&info);
-	printf("ConnectServerInfo ret = %d\n",ret);		
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("ConnectServerInfo(%d,%d,%x);\n",pid,coid,bad);
+		ret = ConnectServerInfo(pid,coid,&info);
+		printf("ConnectServerInfo ret = %d\n",ret);		
+	}
+	else
+	{
+		printf("ConnectServerInfo(%d,%d,%x);\n",pid,coid,&info);
+		ret = ConnectServerInfo(pid,coid,&info);
+		printf("ConnectServerInfo ret = %d\n",ret);			
+	}
 }
 
 // extern int ConnectClientInfo(int __scoid, struct _client_info *__info, int __ngroups);
 void test_connect_client_info()
 {
-	int scoid = 0;
+	int scoid = coid;
 	struct _client_info info;
 	int ngroups = get_interesting_32bit_value();
 	int ret = 0;
 
-	printf("ConnectClientInfo(%d,%x,%d);\n",scoid,&info,ngroups);
-	ret = ConnectClientInfo(scoid,&info,ngroups);
-	printf("ConnectClientInfo ret = %d\n",ret);			
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("ConnectClientInfo(%d,%x,%d);\n",scoid,bad,ngroups);
+		ret = ConnectClientInfo(scoid,&info,ngroups);
+		printf("ConnectClientInfo ret = %d\n",ret);		
+	}
+	else
+	{
+		printf("ConnectClientInfo(%d,%x,%d);\n",scoid,&info,ngroups);
+		ret = ConnectClientInfo(scoid,&info,ngroups);
+		printf("ConnectClientInfo ret = %d\n",ret);			
+	}
 }
 
 // extern int ConnectFlags(pid_t __pid, int __coid, unsigned __mask, unsigned __bits);
 void test_connect_flags()
 {
 	int ret = 0;
-	int coid = 0;
 	int pid = 0;	
 	unsigned mask = get_interesting_32bit_value();
 	unsigned bits = get_interesting_32bit_value();
@@ -341,15 +431,27 @@ void test_channel_connect_attr()
 	new_attr.maxbuf = get_interesting_16bit_value();
 	new_attr.num_curmsgs = get_interesting_32bit_value();
 
-	printf("ChannelConnectAttr(%d,%x,%x,%d);\n",id,&old_attr,&new_attr,flags);
-	ret = ChannelConnectAttr(id,&old_attr,&new_attr,flags);
-	printf("ChannelConnectAttr ret = %d\n",ret);			
+	if (chance(4))
+	{
+		int bad =get_interesting_32bit_value();
+		int bad2 = get_interesting_32bit_value();
+		printf("ChannelConnectAttr(%d,%x,%x,%d);\n",id,bad,bad2,flags);
+		ret = ChannelConnectAttr(id,&old_attr,&new_attr,flags);
+		printf("ChannelConnectAttr ret = %d\n",ret);		
+	}	
+	else
+	{
+		printf("ChannelConnectAttr(%d,%x,%x,%d);\n",id,&old_attr,&new_attr,flags);
+		ret = ChannelConnectAttr(id,&old_attr,&new_attr,flags);
+		printf("ChannelConnectAttr ret = %d\n",ret);			
+	}
 }
 
+#ifdef QNX80
 // extern int ConnectClientInfoAble(int __scoid, struct _client_info **__info_pp, int flags, struct _client_able * const abilities, const int nable);
 void test_connect_client_info_able()
 {
-	int scoid = 0;
+	int scoid = coid;
 	struct _client_info info;
 
 	struct _client_info * info_p = &info;
@@ -366,10 +468,11 @@ void test_connect_client_info_able()
 	printf("ConnectClientInfoAble ret = %d\n",ret);
 }
 
+
 // extern int ConnectClientInfoExt(int __scoid, struct _client_info **__info_pp, int flags);
 void test_connect_client_info_ext()
 {
-	int scoid = 0;
+	int scoid = coid;
 	struct _client_info info;
 	struct _client_info * info_p = &info;	
 	int flags = get_interesting_32bit_value();	
@@ -390,12 +493,22 @@ void test_connect_client_info_ext_free()
 	printf("ClientInfoExtFree ret = %d\n",ret);
 }
 
-// Signal syscalls
-// SignalReturn(struct _sighandler_info *__info);
+#else
+void test_connect_client_info_able()
+{
+	printf("null func\n");
+}
 
-// 	struct kerargs_signal_return {
-//		KARGSLOT(SIGSTACK 	*s);
-//	} signal_return;
+void test_connect_client_info_ext()
+{
+	printf("null func\n");
+}
+
+void test_connect_client_info_ext_free()
+{
+	printf("null func\n");
+}
+#endif
 
 void test_signal_return()
 {
@@ -492,18 +605,36 @@ void test_sync_type_create()
 	memset(&attr,0,sizeof(struct _sync_attr));
 	attr.__protocol = 1;
 
-	printf("SyncTypeCreate(%d,%x,%x);\n",type,&sync,&attr);
-	ret = SyncTypeCreate(type,&sync,&attr);
-	printf("SyncTypeCreate ret = %d\n",ret);
-
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("SyncTypeCreate(%d,%x,%x);\n",type,bad,bad);
+		ret = SyncTypeCreate(type,&sync2,&attr);
+		printf("SyncTypeCreate ret = %d\n",ret);
+	}
+	else
+	{
+		printf("SyncTypeCreate(%d,%x,%x);\n",type,&sync2,&attr);
+		ret = SyncTypeCreate(type,&sync2,&attr);
+		printf("SyncTypeCreate ret = %d\n",ret);		
+	}
 }
 
 void test_sync_destroy()
 {
 	int ret = 0;
 	printf("SyncDestroy()\n");
-	ret = SyncDestroy(&sync);
-	printf("SyncDestroy ret = %d\n",ret);
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		ret = SyncDestroy(bad);
+		printf("SyncDestroy ret = %d\n",ret);
+	}
+	else
+	{
+		ret = SyncDestroy(&sync2);
+		printf("SyncDestroy ret = %d\n",ret);
+	}
 }
 
 void test_syncctl()
@@ -513,25 +644,49 @@ void test_syncctl()
 	if (cmd == 1) return;
 	char buf[256];
 	memset(buf,0x41,256);
-	printf("SyncCtl(%d,%x,%x);\n",cmd,&sync,&buf);
-	ret = SyncCtl(cmd,&sync,&buf);
-	printf("SyncCtl ret = %d\n",ret);
+
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("SyncCtl(%d,%x,%x);\n",cmd,bad,bad);
+		ret = SyncCtl(cmd,&sync2,&buf);
+		printf("SyncCtl ret = %d\n",ret);
+	}
+	else
+	{
+		printf("SyncCtl(%d,%x,%x);\n",cmd,&sync2,&buf);
+		ret = SyncCtl(cmd,&sync2,&buf);
+		printf("SyncCtl ret = %d\n",ret);
+	}
 }
 
 void test_sync_mutex_event()
 {
 		int ret = 0;
 		struct sigevent event;
-		printf("SyncMutexEvent();\n");
-		ret = SyncMutexEvent(&sync,&event);
-		printf("SyncMutexEvent ret = %d\n",ret);
+
+		if (chance(4))
+		{
+			int bad = get_interesting_32bit_value();
+			printf("SyncMutexEvent();\n");
+			ret = SyncMutexEvent(bad,bad);
+			printf("SyncMutexEvent ret = %d\n",ret);			
+		}
+		else
+		{
+			printf("SyncMutexEvent();\n");
+			ret = SyncMutexEvent(&sync2,&event);
+			printf("SyncMutexEvent ret = %d\n",ret);		
+		}
+
+
 }
 
 void test_sync_mutex_lock()
 {
 	int ret = 0;
 	printf("SyncMutexLock();\n");
-	ret = SyncMutexLock(&sync);
+	ret = SyncMutexLock(&sync2);
 	printf("SyncMutexLock ret = %d\n",ret);	
 }
 
@@ -539,21 +694,43 @@ void test_sync_mutex_unlock()
 {
 	int ret = 0;
 	printf("SyncMutexUnlock();\n");
-	ret = SyncMutexUnlock(&sync);
+	ret = SyncMutexUnlock(&sync2);
 	printf("SyncMutexUnlock ret = %d\n",ret);	
 }
 
 void test_sync_mutex_revive()
 {
+	// sometimes use bad values.
+
+	char buf[256];
+	memset(buf,0,256);
 	int ret = 0;
-	ret = SyncMutexRevive(&sync);
-	printf("SyncMutexRevive ret = %d\n",ret);	
+
+	if (chance(4))
+	{
+		buf[0] = get_interesting_32bit_value();
+		buf[1] = get_interesting_32bit_value();
+		buf[2] = get_interesting_32bit_value();
+		int ret = 0;
+		printf("SyncMutexRevive(%x);\n",&buf);
+		ret = SyncMutexRevive(&sync2);
+		printf("SyncMutexRevive ret = %d\n",ret);
+	}
+	else
+	{
+		printf("SyncMutexRevive(%x);\n",&sync2);
+		ret = SyncMutexRevive(&sync2);
+		printf("SyncMutexRevive ret = %d\n",ret);
+	}
+
+
+		
 }
 
 void change_sync_stuff()
 {
-	sync.__u.__count = get_interesting_32bit_value();
-	sync.__owner = get_interesting_32bit_value();
+	//sync.__u.__count = get_interesting_32bit_value();
+	sync2.__owner = get_interesting_32bit_value();
 }
 
 
@@ -577,7 +754,7 @@ void test_int_hook_idle()
 		perror("InterruptHookIdle");	
 }
 
-
+#ifdef QNX80
 void test_int_hook_idle2()
 {
 	int ret =0; 
@@ -586,6 +763,7 @@ void test_int_hook_idle2()
 	if (ret == -1)
 		perror("InterruptHookIdle2");	
 }
+#endif
 
 void test_int_attach()
 {
@@ -600,10 +778,454 @@ void test_int_attach()
 
 ///////////////////////////////////// Thread Functions /////////////////////////////////////
 
+
+
+// extern int ThreadCtl(int __cmd, void *__data);
+void test_thread_ctl()
+{
+	int pid = 0;
+	int ret = 0;
+
+	int cmd = get_interesting_32bit_value();
+	int data = get_interesting_32bit_value();
+
+	printf("ThreadCtl(%d,%d);\n",cmd,data);
+	ret = ThreadCtl(cmd,&data);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////
+// Scheduler stuff
+
+void test_sched_get()
+{
+	int pid = 0;
+	int tid = 0;
+	int ret = 0;
+	struct sched_param param;
+
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("SchedGet(%d,%d,%x);\n",pid,tid,bad);
+		ret = SchedGet(pid,tid,&param);
+	}
+	else
+	{
+		printf("SchedGet(%d,%d,%x);\n",pid,tid,&param);
+		ret = SchedGet(pid,tid,&param);
+	}
+
+}
+
+void test_sched_set()
+{
+	int pid = 0;
+	int tid = 0;
+	int ret = 0;
+	int algorithm = rand() % 8;
+	struct sched_param param;
+
+	if (chance(4)) 
+	{
+		int bad = get_interesting_32bit_value();
+		printf("SchedSet(%d,%d,%d,%x);\n",pid,tid,algorithm,bad);
+		ret = SchedGet(pid,tid,&param);
+	}
+	else
+	{
+		printf("SchedSet(%d,%d,%d,%x);\n",pid,tid,algorithm,&param);
+		ret = SchedGet(pid,tid,&param);		
+	}
+}
+
+void test_sched_info()
+{
+	int pid = 0;
+	int tid = 0;
+	int ret = 0;
+	int algorithm = get_interesting_32bit_value();
+	struct _sched_info info;
+
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("SchedInfo(%d,%d,%x);\n",pid,algorithm,bad);
+		ret = SchedInfo(pid,algorithm,&info);
+	}
+	else
+	{
+		printf("SchedInfo(%d,%d,%x);\n",pid,algorithm,&info);
+		ret = SchedInfo(pid,algorithm,&info);		
+	}
+}
+
+void test_sched_yield()
+{
+	int ret = 0;
+	printf("SchedYield();\n");
+	ret = SchedYield();
+}
+
+void test_sched_ctl()
+{
+	int cmd = 0;
+	char data[256];
+	data[0] = get_interesting_8bit_value();
+	data[1] = get_interesting_8bit_value();
+	data[2] = get_interesting_8bit_value();
+	data[3] = get_interesting_8bit_value();
+	int length = get_interesting_32bit_value();
+	int ret = 0;
+
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("SchedCtl(%d,%x,%d);\n",cmd,bad,length);
+		ret = SchedCtl(cmd,bad,length);	
+	}
+	else
+	{
+		printf("SchedCtl(%d,%x,%d);\n",cmd,&data,length);
+		ret = SchedCtl(cmd,&data,length);		
+	}
+
+}
+
+#ifdef QNX80
+void test_sched_job_create()
+{
+	int ret = 0;
+	printf("SchedJobCreate(%x);\n",&job);
+	ret = SchedJobCreate(&job);
+}
+
+void test_sched_job_destroy()
+{
+	int ret = 0;
+	printf("SchedJobDestroy(%x);\n",&job);
+	ret = SchedJobDestroy(&job);
+}
+
+// extern int SchedWaypoint(nto_job_t *__job, const _Int64t *__new, const _Int64t *__max, _Int64t *__old);
+void test_sched_waypoint()
+{
+	_Int64t __new = get_interesting_32bit_value();
+	_Int64t __old = get_interesting_32bit_value();
+	_Int64t __max = get_interesting_32bit_value();
+	int ret = 0;
+	printf("SchedWaypoint(%x,%ul,%ul,%ul);\n",__new,__max,__old);
+	ret = SchedWaypoint(&job,__new,__max,__old);
+}
+
+void test_sched_waypoint2()
+{
+	_Int64t __new = get_interesting_32bit_value();
+	_Int64t __old = get_interesting_32bit_value();
+	_Int64t __max = get_interesting_32bit_value();
+	int ret = 0;
+	printf("SchedWaypoint2(%x,%ul,%ul,%ul);\n",__new,__max,__old);
+	ret = SchedWaypoint2(&job,__new,__max,__old);
+}
+
+#endif
+//////////////////////////////// Timer Functions /////////////////////////////////////////
+
+void test_timer_create()
+{
+	int ret = 0; 
+	printf("TimerCreate(%d,%x);\n");
+	timerid = TimerCreate(id,&notify);
+}
+
+void test_timer_destroy()
+{
+	int ret = 0;
+	printf("TimerDestroy(%d,%x);\n");
+	ret = TimerDestroy(timerid);
+}
+
+void test_settime()
+{
+	int flags = 0;
+	int ret = 0;
+	if (chance(4))
+	{
+		printf("TimerSettime(%d,%d,%x,%x);\n",timerid,flags,&itime,&itime);
+		ret = TimerSettime(timerid,flags,&itime,&itime);
+	}
+	else
+	{
+		printf("TimerSettime(%d,%d,%x,%x);\n",timerid,flags,&itime,&otime);
+		ret = TimerSettime(timerid,flags,&itime,&otime);
+	}
+}
+
+void test_timerinfo()
+{
+	pid_t pid = 0;
+	int flags = 0;
+	struct _timer_info info;	
+	info.itime = itime;
+	info.otime = otime;
+	info.tid = 0;
+	info.notify = get_interesting_32bit_value();
+	info.clockid = id;
+	info.event = notify;
+	int ret = 0;
+
+	printf("TimerInfo(%d,%d,%d,%x);\n",pid,timerid,flags,&info);
+	ret = TimerInfo(pid,timerid,flags,&info);
+}
+
+void test_timeralarm()
+{
+	int ret = 0;
+	printf("TimerAlarm(%d,%x,%x);\n",timerid,&itime,&otime);
+	ret = TimerAlarm(timerid,&itime,&otime);	
+}
+
+// extern int TimerTimeout(clockid_t __id, int __flags, const struct sigevent *__notify, const _Uint64t *__ntime, _Uint64t *__otime);
+void test_timertimeout()
+{
+	int flags = 0;
+	int ret = 0;
+	_Uint64t ntime;
+	_Uint64t notime;
+	ret = TimerTimeout(id,flags,&notify,&ntime,&notime);
+}
+
+//////////////////////////////////// Clock Stuff ///////////////////////////////////////////
+
+void test_clocktime()
+{
+	int ret = 0;
+	_Uint64t _new;
+	_Uint64t _old;
+	
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("ClockTime(%d,%d,%d);\n",id,bad,bad);
+		ret = ClockTime(id,bad,bad);
+	}
+	else
+	{
+		printf("ClockTime(%d,%x,%x);\n",id,&_new,&_old);
+		ret = ClockTime(id,&_new,&_old);
+	}
+}
+
+void test_clockadjust()
+{
+	struct _clockadjust _new;
+	struct _clockadjust _old;
+	int ret = 0;
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("ClockAdjust(%d,%d,%d);\n",id,bad,bad);
+		ret = ClockAdjust(id,bad,bad);
+	}
+	else
+	{
+		printf("ClockAdjust(%d,%x,%x);\n",id,&_new,&_old);
+		ret = ClockAdjust(id,&_new,&_old);
+	}
+}
+
+void test_clockperiod()
+{
+	struct _clockperiod _new;
+	struct _clockperiod _old;
+	int ret = 0;
+	int res = get_interesting_32bit_value();
+	if (chance(4))
+	{
+		int bad = get_interesting_32bit_value();
+		printf("ClockPeriod(%d,%d,%d,%d);\n",id,bad,bad,res);
+		ret = ClockPeriod(id,bad,bad,res);
+	}
+	else
+	{
+		printf("ClockPeriod(%d,%x,%x,%d);\n",id,&_new,&_old,res);
+		ret = ClockPeriod(id,&_new,&_old,res);
+	}	
+}
+
+void test_clockid()
+{
+	int ret = 0;
+	int pid = 0;
+	int tid = 0;
+	printf("ClockId(%d,%d);\n",pid,tid);
+	ret = ClockId(pid,tid);
+}
+
+////////////////////////////////// Message Stuff ///////////////////////////////////////
+
+void test_msgpause()
+{
+	int ret = 0;
+	int cookie = 0;
+	printf("MsgPause(%d,%d);\n",rcvid,cookie);
+	ret = MsgPause(rcvid,cookie);
+}
+
+void test_msgcurrent()
+{
+	int ret = 0;
+	printf("MsgCurrent(%d);\n",rcvid);
+	ret = MsgCurrent(rcvid);
+}
+
+// extern int MsgSend(int __coid, const void *__smsg, int __sbytes, void *__rmsg, int __rbytes);
+void test_msgsend()
+{
+	char buf[256];
+	int ret = 0;
+	int len = get_interesting_32bit_value();
+	printf("MsgSend(%d,%x,%d,%x,%d);\n",coid,&buf,len,0,0);
+	ret = MsgSend(coid,&buf,len,0,0);
+}
+
+void test_msgerror()
+{
+	int ret = 0;
+	int e = get_interesting_32bit_value();
+	printf("MsgError(%d,%d);\n",rcvid,e);
+	ret = MsgError(rcvid,e);
+}
+
+// MsgWritev(int __rcvid, const struct iovec *__iov, int __parts, int __offset);
+void test_msgwritev()
+{
+	int ret = 0;
+	int parts = get_interesting_32bit_value();
+	int offset = get_interesting_32bit_value();
+	struct iovec				iov[2];
+	char buf[256];
+
+	SETIOV(&iov[0], &buf, get_interesting_32bit_value());
+	SETIOV(&iov[1], &buf, get_interesting_32bit_value());
+
+	printf("MsgWritev(%d,%x,%d,%d);\n",rcvid,iov,parts,offset);
+	ret = MsgWritev(rcvid,iov,parts,offset);
+}
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////
+
+// __KER_POWER_PARAMETER
+// extern int PowerParameter(unsigned __id, unsigned __struct_len, 
+// const struct nto_power_parameter *__new,
+// struct nto_power_parameter *__old);
+
+#ifdef QNX80
+void test_pow_param()
+{
+	int id = get_interesting_32bit_value();
+	struct nto_power_parameter n;
+	struct nto_power_parameter o;
+	int len = get_interesting_32bit_value();
+
+	int ret = 0;
+	printf("PowerParameter(%d,%d,%x,%x);\n",id,len,&n,&o);
+	ret = PowerParameter(id,len,&n,&o);
+	printf("PowerParameter ret = %d\n",ret);
+}
+#else
+void test_pow_param()
+{
+}
+
+#endif
+
+void test_rawsyscall()
+{
+	int r0 = get_interesting_32bit_value() % 120;
+	int r1 = get_interesting_32bit_value();
+	int r2 = get_interesting_32bit_value();
+	int r3 = get_interesting_32bit_value();
+	int r4 = get_interesting_32bit_value();
+
+	printf("syscall(%d,%d,%d,%d,%d);\n",r0,r1,r2,r3,r4);
+	syscall(r0,r1,r2,r3,r4);
+}
+
+#ifdef ARM
+__attribute__ ((naked)) void syscall(int callnum, ...)
+{
+	asm (
+     	"STMFD  SP!, {LR}\n\t"
+		"MOV R12, R0\n"
+		" SVC 0x51\n"
+		"ldmfd sp, {PC}"
+		);
+}
+
+#else
+// X86 version
+void syscall(int callnum, ...)
+{
+
+}
+#endif
+
 void callback()
 {
 	printf("Callback fired!\n");
+	void (*syscalls[])(void) = {
+
+	 test_channel_create,
+	 test_channel_create_ext, 
+	 test_channel_destroy,
+     test_connect_attach,
+     test_connect_attach_ext,
+     test_connect_server_info,
+     test_connect_client_info,
+     test_connect_flags,
+     test_channel_connect_attr,
+     //test_connect_client_info_able,
+     //test_connect_client_info_ext,
+     test_sys_cpupage_set,
+    
+     test_sync_type_create,
+     test_sync_destroy,
+     test_syncctl,
+     test_sync_mutex_event,
+     //test_sync_mutex_lock,
+     change_sync_stuff,
+     test_sync_mutex_unlock,
+     test_sync_mutex_revive,
+     test_int_hook_trace,
+     test_int_hook_idle,
+     //test_int_hook_idle2,
+     test_int_attach,
+
+     test_thread_ctl,
+     test_sched_get,
+     test_sched_set,
+     test_sched_info,
+     test_sched_yield,
+     test_sched_ctl,
+     //test_sched_job_create,
+     //test_sched_job_destroy,
+     //test_sched_waypoint,
+     //test_sched_waypoint2,
+     test_timer_create,
+     test_timer_destroy,
+     test_settime,
+     test_timerinfo,
+     test_timertimeout
+	};
+
+	int idx = rand() % 34;
+	void (*syscall)() = syscalls[idx]; 
+	syscall();
+
 }
+
 
 // extern int ThreadCreate(pid_t __pid, void *(*__func)(void *__arg), void *__arg, const struct _thread_attr *__attr);
 void test_thread_create()
@@ -630,243 +1252,79 @@ void test_thread_create()
 	ThreadJoin(ret,0);
 }
 
-// extern int ThreadCtl(int __cmd, void *__data);
-void test_thread_ctl()
+void test_thread_destroy()
 {
-	int pid = 0;
-	int ret = 0;
-
-	int cmd = get_interesting_32bit_value();
-	int data = get_interesting_32bit_value();
-
-	printf("ThreadCtl(%d,%d);\n",cmd,data);
-	ret = ThreadCtl(cmd,&data);
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////
-// Scheduler stuff
-
-void test_sched_get()
-{
-	int pid = 0;
 	int tid = 0;
-	int ret = 0;
-	struct sched_param param;
-
-	printf("SchedGet(%d,%d,%x);\n",pid,tid,&param);
-	ret = SchedGet(pid,tid,&param);
+	int priority = get_interesting_32bit_value();
+	ThreadDestroy(tid,priority,0);
 }
 
-void test_sched_set()
-{
-	int pid = 0;
-	int tid = 0;
-	int ret = 0;
-	int algorithm = 0;
-	struct sched_param param;
-	printf("SchedSet(%d,%d,%d,%x);\n",pid,tid,algorithm,&param);
-	ret = SchedGet(pid,tid,&param);
-}
-
-void test_sched_info()
-{
-	int pid = 0;
-	int tid = 0;
-	int ret = 0;
-	int algorithm = 0;
-	struct _sched_info info;
-
-	printf("SchedInfo(%d,%d,%x);\n",pid,algorithm,&info);
-	ret = SchedInfo(pid,algorithm,&info);
-}
-
-void test_sched_yield()
-{
-	int ret = 0;
-	ret = SchedYield();
-}
-
-void test_sched_ctl()
-{
-	int cmd = 0;
-	char data[256];
-	int length = get_interesting_32bit_value();
-	int ret = 0;
-
-	printf("SchedCtl(%d,%x,%d);\n");
-	ret = SchedCtl(cmd,&data,length);
-}
-
-void test_sched_job_create()
-{
-	int ret = 0;
-	printf("SchedJobCreate(%x);\n",&job);
-	ret = SchedJobCreate(&job);
-}
-
-void test_sched_job_destroy()
-{
-	int ret = 0;
-	printf("SchedJobDestroy(%x);\n",&job);
-	ret = SchedJobDestroy(&job);
-}
-
-// extern int SchedWaypoint(nto_job_t *__job, const _Int64t *__new, const _Int64t *__max, _Int64t *__old);
-void test_sched_waypoint()
-{
-	_Int64t __new;
-	_Int64t __old;
-	_Int64t __max;
-	int ret = 0;
-	printf("SchedWaypoint(%x,%ul,%ul,%ul);\n",__new,__max,__old);
-	ret = SchedWaypoint(&job,__new,__max,__old);
-}
-
-void test_sched_waypoint2()
-{
-	_Int64t __new;
-	_Int64t __old;
-	_Int64t __max;
-	int ret = 0;
-	printf("SchedWaypoint2(%x,%ul,%ul,%ul);\n",__new,__max,__old);
-	ret = SchedWaypoint2(&job,__new,__max,__old);
-}
-
-//////////////////////////////// Timer Functions /////////////////////////////////////////
-
-void test_timer_create()
-{
-	int ret = 0; 
-	printf("TimerCreate(%d,%x);\n");
-	timerid = TimerCreate(id,&notify);
-}
-
-void test_timer_destroy()
-{
-	int ret = 0;
-	printf("TimerDestroy(%d,%x);\n");
-	ret = TimerDestroy(timerid);
-}
-
-void test_settime()
-{
-	int flags = 0;
-	int ret = 0;
-	struct _itimer itime;
-	struct _itimer otime;
-	printf("TimerSettime(%d,%d,%x,%x);\n",timerid,flags,&itime,&otime);
-	ret = TimerSettime(timerid,flags,&itime,&otime);
-}
-
-void test_timerinfo()
-{
-	pid_t pid = 0;
-	int flags = 0;
-	struct _timer_info info;
-	int ret = 0;
-
-	printf("TimerInfo(%d,%d,%d,%x);\n",pid,timerid,flags,&info);
-	ret = TimerInfo(pid,timerid,flags,&info);
-}
-
-void test_timeralarm()
-{
-	struct _itimer itime;
-	struct _itimer otime;
-	int ret = 0;
-	printf("TimerAlarm(%d,%x,%x);\n",timerid,&itime,&otime);
-	ret = TimerAlarm(timerid,&itime,&otime);	
-}
-
-void test_timertimeout()
-{
-	
-}
-
-//////////////////////////////////////////////////////////////////////////////////////////
-
-// __KER_POWER_PARAMETER
-// extern int PowerParameter(unsigned __id, unsigned __struct_len, 
-// const struct nto_power_parameter *__new,
-// struct nto_power_parameter *__old);
-
-void test_pow_param()
-{
-	int id = 0;
-	struct nto_power_parameter n;
-	struct nto_power_parameter o;
-	int len = -1;
-
-	int ret = 0;
-	ret = PowerParameter(id,len,&n,&o);
-	printf("PowerParameter ret = %d\n",ret);
-	perror("PowerParameter");	
-}
-
-#ifdef ARM
-__attribute__ ((naked)) void syscall_arm(int callnum, ...)
-{
-	asm (
-     	"STMFD  SP!, {LR}\n\t"
-		"MOV R12, R0\n"
-		" SVC 0x51\n"
-		"ldmfd sp, {PC}"
-		);
-}
-
-#endif
-
-#ifdef X86
-void syscall_x86(int callnum, ...)
-{
-
-}
-#endif
+void null_func() { }
 
 // List of syscalls to test
 void (*syscalls[])(void) = {
-	 /**
-	 test_channel_create,
-	 test_channel_create_ext, 
-	 test_channel_destroy,
-     test_connect_attach,
-     test_connect_attach_ext,
-     test_connect_server_info,
-     test_connect_client_info,
-     test_connect_flags,
-     test_channel_connect_attr,
-     test_connect_client_info_able,
-     test_connect_client_info_ext,
-     test_sys_cpupage_set
-     **/
-     //test_sync_type_create,
-     //test_sync_destroy,
-     //test_syncctl,
-     //test_sync_mutex_event,
-     //test_sync_mutex_lock,
-     //change_sync_stuff,
-     //test_sync_mutex_unlock,
-     //test_sync_mutex_revive,
-     //test_int_hook_trace,
-     //test_int_hook_idle,
-     //test_int_hook_idle2,
-     //test_int_attach
-     test_thread_create,
-     test_thread_ctl,
-     test_sched_get,
-     test_sched_set,
-     test_sched_info,
-     test_sched_yield,
-     test_sched_ctl,
-     test_sched_job_create,
-     test_sched_job_destroy,
-     test_sched_waypoint,
-     test_sched_waypoint2,
-     test_timer_create,
-     test_timer_destroy,
-     test_settime,
-     test_timerinfo
+
+	 test_channel_create,              	// 0
+	 test_channel_create_ext, 			// 1
+	 test_channel_destroy,				// 2
+     test_connect_attach,				// 3
+     test_connect_attach_ext,			// 4
+     test_connect_server_info,			// 5
+     test_connect_client_info,			// 6
+     test_connect_flags,				// 7
+     test_channel_connect_attr,			// 8
+     test_connect_client_info_able,		// 9
+     test_connect_client_info_ext,		// 10
+     test_sys_cpupage_set,				// 11
+    
+     test_sync_type_create,				// 12
+     test_sync_destroy,					// 13
+     test_syncctl,						// 14
+     test_sync_mutex_event,				// 15
+     //test_sync_mutex_lock,			// 16
+     null_func,							// 16
+     change_sync_stuff,					// 17
+     test_sync_mutex_unlock,			// 18
+     test_sync_mutex_revive,			// 19
+     test_int_hook_trace,				// 20
+     test_int_hook_idle,				// 21
+     test_int_hook_idle2,				// 22
+     test_int_attach,					// 23
+
+     test_thread_create,				// 24
+     test_thread_ctl,					// 25
+     test_sched_get,					// 26
+     test_sched_set,					// 27
+     test_sched_info,					// 28
+     test_sched_yield,					// 29
+     test_sched_ctl,					// 30
+     test_sched_job_create,				// 31
+     test_sched_job_destroy,			// 32
+     test_sched_waypoint,				// 33
+     test_sched_waypoint2,				// 34
+     test_timer_create,					// 35
+     test_timer_destroy,				// 36
+     test_settime,						// 37
+     test_timerinfo,					// 38
+     test_timertimeout,					// 39
+     test_traceevent,					// 40
+     test_cache_flush,					// 41
+     test_clocktime,					// 42
+     test_clockadjust,					// 43
+     test_clockperiod,					// 44
+     test_clockid,						// 45
+
+     test_pow_param,					// 46
+     //test_rawsyscall,					// 47
+
+     // Msg Stuff
+     test_msgpause,						// 47
+     //test_msgsend,						// 48
+     test_msgcurrent,					// 49
+     test_msgwritev,					// 50
+
 	};
+
 
 int main(int argc, char *argv[])
 {
@@ -875,108 +1333,34 @@ int main(int argc, char *argv[])
 	srand(time(0));
 	init();
 
-//	test_signal_fault();
+	int table_size = (sizeof(syscalls) / 4);
+	printf("Syscall table size = %d\n",table_size);
 
-	//test_signal_action();
-	//test_signal_procmask();
-
-	//test_signal_return();
-
-	while (1) {
-		int idx = rand() % 15;
-		void (*syscall)() = syscalls[idx]; 
-		syscall();
-	}
-
-	//test_signal_return();
-
-	
-	/**
-	test_channel_create();
-	test_channel_create_ext();
-	test_channel_destroy();
-	test_connect_attach();
-	test_connect_attach_ext();
-	test_connect_detach();
-
-	test_connect_server_info();
-	test_connect_client_info();
-	test_connect_flags();
-	test_channel_connect_attr();
-	test_connect_client_info_able();
-	test_connect_client_info_ext();
-	**/
-	//test_connect_client_info_ext_free();
-
-
-
-	
-
-	
-
-
-	//(*syscalls[idx])();
-
-	//test_traceevent();
-	//test_ring0();
-	//test_cache_flush();
-	//test_sys_cpupage_get();
-	//test_sys_cpupage_set();
-
-	// Signals
-	//test_signal_return();
-	//test_signal_fault();
-	//test_signal_action();
-	//test_signal_procmask();
-	// test_signal_suspend(); - blocks
-	//test_signal_waitinfo(); 
-
-	// Channels
-	
-
-	//test_pow_param();
-
-
-	//struct _process_local_storage		*pls;
-
-	//pls = __SysCpupageGet(1);
-	//printf("pls = %p\n",pls);
-
-	//__SysCpupageSet(1,0);
-
-	//pls = __SysCpupageGet(1);
-	//printf("pls = %p\n",pls);
-
-
-	/**
-	int r0;
-	int r1;
-	int r2; 
-	int r3; 
-	int r4; 
-	int r5; 
-	int r6;
-	int r7;
-
-	while (1) 
+	if (argc > 1) 
 	{
-		// Syscall number (0-106)
-		r0 = rand() % 106;
-		if (r0 == 48 || r0 == 58 || r0 == 14 || r0 == 24)
+		// for testing singular calls
+		int idx = atoi(argv[1]);
+		printf("index = %d\n",idx);
+		while (1)
 		{
-			r0 = 0;
+			if (idx < 0 || idx > table_size-1)
+			{
+				printf("outside of syscall table!!\n");
+				exit(1);
+			}
+			void (*syscall)() = syscalls[idx]; 
+			syscall();
 		}
-		printf("num = %d\n",r0);
-
-		r1 = get_interesting_value();
-		r2 = get_interesting_value();
-		r3 = get_interesting_value();
-		r4 = get_interesting_value();
-		r5 = get_interesting_value();
-		r6 = get_interesting_value();
-		r7 = get_interesting_value();
-
-		syscall_arm(r0,r1,r2,r3,r4,r5,r6,r7);
 	}
-	**/
+	else
+	{
+		while (1)
+		{
+			int idx = rand() % table_size;
+			void (*syscall)() = syscalls[idx]; 
+			syscall();
+		}
+	}
+
+	return 0;
 }
