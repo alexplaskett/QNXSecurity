@@ -1,6 +1,6 @@
 # QNX Security Tools
 
-By Alex Plaskett and [Georgi Geshev](https://twitter.com/munmap)
+By [Alex Plaskett](https://github.com/alexplaskett) and [Georgi Geshev](https://twitter.com/munmap)
 
 Random scripts produced as part of the research into QNX security. For more information please see the following publications:
 
@@ -10,7 +10,7 @@ Random scripts produced as part of the research into QNX security. For more info
 
 The following tools are included:
 
-- FWAnalysis for tools used for static analysis of firmware
+- FWAnalysis for tools used for static analysis of firmware and finding low hanging fruit bugs
 
 - IPCFuzz for fuzzing QNX IPC
 

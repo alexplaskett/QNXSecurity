@@ -2,6 +2,7 @@
 import os
 
 """ Possibly move this to a bash script since its easier 
+Currently broken code! 
 http://www.qnx.com/developers/docs/6.5.0/index.jsp?topic=%2Fcom.qnx.doc.neutrino_pps%2Fapi%2Fppsparse.html
 """
 

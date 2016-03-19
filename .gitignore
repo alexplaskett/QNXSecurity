@@ -1,2 +1,10 @@
 devrandom.py
 *.pyc
+
+msgfuzz
+minfuzz*
+backup*
+*.idb
+test*
+tracetest*
+
