@@ -8,19 +8,21 @@ Random scripts produced as part of the research into QNX security. For more info
 
 - [QNX Security Whitepaper](https://labs.mwrinfosecurity.com/assets/BlogFiles/mwri-qnx-security-whitepaper-2016-03-14.pdf)
 
-FWAnalysis for tools used for static analysis of firmware
+The following tools are included:
 
-IPCFuzz for fuzzing QNX IPC
+- FWAnalysis for tools used for static analysis of firmware
 
-PPSFuzz for fuzzing Persistant Publish Subscribe 
+- IPCFuzz for fuzzing QNX IPC
 
-MsgFuzz for fuzzing PROCMGR, MEMMGR and PATHMGR
+- PPSFuzz for fuzzing Persistant Publish Subscribe 
 
-SyscallFuzz for System Call Fuzzing Neutrino Syscalls
+- MsgFuzz for fuzzing PROCMGR, MEMMGR and PATHMGR
 
-blackberry_monitor.py for fuzzing through GDB. 
+- SyscallFuzz for System Call Fuzzing Neutrino Syscalls
 
-devrev.sh for a QNX device review script.
+- blackberry_monitor.py for fuzzing through GDB. 
+
+- devrev.sh for a QNX device review script.
 
 
 
